@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QSlider, QGroupBox, QFileDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QPixmap, QImage
 from core.detector import DetectorThread
 
 BUILTIN_MODELS = ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt", "yolov8x.pt"]
@@ -160,14 +160,15 @@ class DetectionTab(QWidget):
         self.btn_pause.setText("⏸  Пауза")
         self.btn_stop.setEnabled(False)
 
-    @pyqtSlot(object)
+    @pyqtSlot(QImage)
     def _on_frame(self, qimg):
         pix = QPixmap.fromImage(qimg)
         self.video_label.setPixmap(pix.scaled(self.video_label.size(),
             Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
     @pyqtSlot(str)
-    def _on_status(self, msg): self.status_lbl.setText(f"Статус: {msg}")
+    def _on_status(self, msg):
+        self.status_lbl.setText(f"Статус: {msg}")
 
     @pyqtSlot(str)
     def _on_error(self, msg):
