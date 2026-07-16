@@ -54,6 +54,16 @@ class AnnotationCanvas(QLabel):
             lines.append(f"{b['class_id']} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
         return lines
 
+    def _scaled_size(self):
+        """Returns (scaled_w, scaled_h) of the pixmap as currently displayed."""
+        if not self._pixmap_orig:
+            return self.width(), self.height()
+        pix = self._pixmap_orig.scaled(
+            self.size(), Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation
+        )
+        return pix.width(), pix.height()
+
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton and self._pixmap_orig:
             self._drawing = True
@@ -70,21 +80,25 @@ class AnnotationCanvas(QLabel):
             self._drawing = False
             x1, y1 = self._start.x(), self._start.y()
             x2, y2 = self._end.x(), self._end.y()
-            if abs(x2-x1) > 5 and abs(y2-y1) > 5:
+            if abs(x2 - x1) > 5 and abs(y2 - y1) > 5:
                 pw, ph = self._pixmap_orig.width(), self._pixmap_orig.height()
-                sx, sy = pw / self.width(), ph / self.height()
+                # Use actual displayed pixmap size, not label size
+                disp_w, disp_h = self._scaled_size()
+                sx, sy = pw / disp_w, ph / disp_h
                 self._boxes.append({
                     "class_id": self._current_class,
-                    "x1": int(min(x1,x2)*sx), "y1": int(min(y1,y2)*sy),
-                    "x2": int(max(x1,x2)*sx), "y2": int(max(y1,y2)*sy),
+                    "x1": int(min(x1, x2) * sx), "y1": int(min(y1, y2) * sy),
+                    "x2": int(max(x1, x2) * sx), "y2": int(max(y1, y2) * sy),
                 })
             self._redraw()
 
     def _redraw(self):
         if not self._pixmap_orig:
             return
-        pix = self._pixmap_orig.scaled(self.size(),
-            Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        pix = self._pixmap_orig.scaled(
+            self.size(), Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
         pw, ph = self._pixmap_orig.width(), self._pixmap_orig.height()
         sx, sy = pix.width() / pw, pix.height() / ph
         painter = QPainter(pix)
@@ -92,19 +106,20 @@ class AnnotationCanvas(QLabel):
         for b in self._boxes:
             color = self._colors[b["class_id"] % len(self._colors)]
             painter.setPen(QPen(color, 2))
-            rx, ry = int(b["x1"]*sx), int(b["y1"]*sy)
-            rw, rh = int((b["x2"]-b["x1"])*sx), int((b["y2"]-b["y1"])*sy)
+            rx, ry = int(b["x1"] * sx), int(b["y1"] * sy)
+            rw, rh = int((b["x2"] - b["x1"]) * sx), int((b["y2"] - b["y1"]) * sy)
             painter.drawRect(rx, ry, rw, rh)
             cls_name = self._classes[b["class_id"]] if b["class_id"] < len(self._classes) else str(b["class_id"])
-            painter.fillRect(rx, ry-16, len(cls_name)*8+4, 16, color)
+            painter.fillRect(rx, ry - 16, len(cls_name) * 8 + 4, 16, color)
             painter.setPen(QPen(Qt.GlobalColor.black))
-            painter.drawText(rx+2, ry-3, cls_name)
+            painter.drawText(rx + 2, ry - 3, cls_name)
         if self._drawing:
-            painter.setPen(QPen(QColor(255,255,0), 1, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(QColor(255, 255, 0), 1, Qt.PenStyle.DashLine))
             x1 = min(self._start.x(), self._end.x())
             y1 = min(self._start.y(), self._end.y())
             painter.drawRect(x1, y1,
-                abs(self._end.x()-self._start.x()), abs(self._end.y()-self._start.y()))
+                abs(self._end.x() - self._start.x()),
+                abs(self._end.y() - self._start.y()))
         painter.end()
         self.setPixmap(pix)
 
