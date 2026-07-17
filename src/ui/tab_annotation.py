@@ -734,7 +734,7 @@ class AnnotationTab(QWidget):
             self.status_lbl.setText("⚠ Сначала выделите бокс на холсте")
             return
         self._template_box = dict(sel)
-        self.canvas.set_template_highlight(self._template_box)
+        self.canvas.set_template_highlight(None)  # show only on next frames
         cls_name = self._current_class_names()[sel["class"]] if sel["class"] < self.class_combo.count() else "?"
         self.tmpl_lbl.setText(f"Шаблон: {cls_name} ✓")
         self.tmpl_lbl.setStyleSheet("color: #80ff80; font-size: 10px;")
