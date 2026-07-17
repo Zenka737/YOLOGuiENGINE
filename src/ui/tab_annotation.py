@@ -10,8 +10,9 @@ from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
 class AnnotationCanvas(QLabel):
     def __init__(self):
         super().__init__()
-        self.setAlignment(Qt.AlignmentFlag.AlignTop |
-                          Qt.AlignmentFlag.AlignLeft)
+        self.setAlignment(
+            Qt.AlignmentFlag.AlignTop
+            | Qt.AlignmentFlag.AlignLeft)
         self.setStyleSheet("border: 2px solid #2d4a7a; background: #0d1b2e;")
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -38,8 +39,11 @@ class AnnotationCanvas(QLabel):
         self._boxes = []
         self._redraw()
 
-    def set_classes(self, classes): self._classes = classes
-    def set_current_class(self, idx): self._current_class = idx
+    def set_classes(self, classes):
+        self._classes = classes
+
+    def set_current_class(self, idx):
+        self._current_class = idx
 
     def undo_last(self):
         if self._boxes:
@@ -117,8 +121,8 @@ class AnnotationCanvas(QLabel):
             color = self._colors[b["class_id"] % len(self._colors)]
             painter.setPen(QPen(color, 2))
             rx, ry = int(b["x1"] * sx), int(b["y1"] * sy)
-            rw, rh = int((b["x2"] - b["x1"]) *
-                         sx), int((b["y2"] - b["y1"]) * sy)
+            rw = int((b["x2"] - b["x1"]) * sx)
+            rh = int((b["y2"] - b["y1"]) * sy)
             painter.drawRect(rx, ry, rw, rh)
             cls_name = self._classes[b["class_id"]] if b["class_id"] < len(
                 self._classes) else str(b["class_id"])
