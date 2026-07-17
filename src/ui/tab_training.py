@@ -1,8 +1,17 @@
 import os
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QFileDialog, QTextEdit, QProgressBar
-)
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QLabel,
+    QSpinBox,
+    QDoubleSpinBox,
+    QComboBox,
+    QGroupBox,
+    QFileDialog,
+    QTextEdit,
+    QProgressBar)
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
@@ -28,7 +37,8 @@ class TrainThread(QThread):
                 name=self.params["name"],
             )
             self.log.emit("Обучение завершено!")
-            self.log.emit(f"Результаты: {self.params['project']}/{self.params['name']}")
+            self.log.emit(
+                f"Результаты: {self.params['project']}/{self.params['name']}")
             self.progress.emit(100)
             self.finished.emit()
         except Exception as e:
@@ -59,12 +69,14 @@ class TrainingTab(QWidget):
         grp_model = QGroupBox("Базовая модель")
         g2 = QVBoxLayout(grp_model)
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt", "yolov8x.pt"])
+        self.model_combo.addItems(
+            ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt", "yolov8x.pt"])
         g2.addWidget(self.model_combo)
         left.addWidget(grp_model)
 
         grp_params = QGroupBox("Параметры обучения")
         g3 = QVBoxLayout(grp_params)
+
         def row(label, widget):
             h = QHBoxLayout()
             h.addWidget(QLabel(label))
@@ -79,7 +91,8 @@ class TrainingTab(QWidget):
         self.batch_spin.setValue(16)
         g3.addLayout(row("Batch:", self.batch_spin))
         self.imgsz_combo = QComboBox()
-        self.imgsz_combo.addItems(["320", "416", "512", "640", "800", "1024", "1280"])
+        self.imgsz_combo.addItems(
+            ["320", "416", "512", "640", "800", "1024", "1280"])
         self.imgsz_combo.setCurrentText("640")
         g3.addLayout(row("imgsz:", self.imgsz_combo))
         self.lr_spin = QDoubleSpinBox()
@@ -128,7 +141,8 @@ class TrainingTab(QWidget):
         main.addWidget(right_w)
 
     def _browse_data(self):
-        path, _ = QFileDialog.getOpenFileName(self, "data.yaml", "", "YAML (*.yaml *.yml)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "data.yaml", "", "YAML (*.yaml *.yml)")
         if path:
             self._data_path = path
             self.data_lbl.setText(f"data.yaml: {os.path.basename(path)}")
@@ -139,21 +153,52 @@ class TrainingTab(QWidget):
             self._out_path = path
             self.out_lbl.setText(path)
 
+    def _validate_yaml(self, path):
+        import yaml
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+        except Exception as e:
+            return f"Не удалось прочитать yaml: {e}"
+        missing = [k for k in ("train", "val") if k not in cfg]
+        if missing:
+            return (
+                f"В файле data.yaml отсутствуют обязательные поля: {', '.join(missing)}.\n"
+                "Добавьте в yaml:\n"
+                "  train: images/train\n"
+                "  val:   images/val\n"
+                "  nc:    1\n"
+                "  names: ['class1']")
+        return None
+
     def _start_train(self):
         data = getattr(self, "_data_path", None)
         if not data:
             self.log_view.append("⚠ Выберите data.yaml")
             return
+        err = self._validate_yaml(data)
+        if err:
+            self.log_view.append(f"❌ {err}")
+            return
         params = {
-            "model": self.model_combo.currentText(), "data": data,
-            "epochs": self.epochs_spin.value(), "batch": self.batch_spin.value(),
-            "imgsz": int(self.imgsz_combo.currentText()), "lr": self.lr_spin.value(),
-            "project": getattr(self, "_out_path", "runs/train"), "name": "yologuiengine_train",
+            "model": self.model_combo.currentText(),
+            "data": data,
+            "epochs": self.epochs_spin.value(),
+            "batch": self.batch_spin.value(),
+            "imgsz": int(
+                self.imgsz_combo.currentText()),
+            "lr": self.lr_spin.value(),
+            "project": getattr(
+                self,
+                "_out_path",
+                "runs/train"),
+            "name": "yologuiengine_train",
         }
         self.train_thread = TrainThread(params)
         self.train_thread.log.connect(lambda m: self.log_view.append(m))
         self.train_thread.progress.connect(self.progress_bar.setValue)
-        self.train_thread.error.connect(lambda e: self.log_view.append(f"❌ {e}"))
+        self.train_thread.error.connect(
+            lambda e: self.log_view.append(f"❌ {e}"))
         self.train_thread.finished.connect(self._on_train_done)
         self.train_thread.start()
         self.btn_train.setEnabled(False)

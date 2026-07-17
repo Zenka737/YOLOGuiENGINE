@@ -10,9 +10,13 @@ from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
 class AnnotationCanvas(QLabel):
     def __init__(self):
         super().__init__()
-        self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.setAlignment(
+            Qt.AlignmentFlag.AlignTop
+            | Qt.AlignmentFlag.AlignLeft)
         self.setStyleSheet("border: 2px solid #2d4a7a; background: #0d1b2e;")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding)
         self.setMinimumSize(400, 400)
         self._pixmap_orig = None
         self._boxes = []
@@ -21,16 +25,25 @@ class AnnotationCanvas(QLabel):
         self._drawing = False
         self._start = QPoint()
         self._end = QPoint()
-        self._colors = [QColor(255,80,80), QColor(80,255,80), QColor(80,180,255),
-                        QColor(255,200,0), QColor(200,80,255), QColor(0,255,200)]
+        self._colors = [
+            QColor(
+                255, 80, 80), QColor(
+                80, 255, 80), QColor(
+                80, 180, 255), QColor(
+                    255, 200, 0), QColor(
+                        200, 80, 255), QColor(
+                            0, 255, 200)]
 
     def load_image(self, path):
         self._pixmap_orig = QPixmap(path)
         self._boxes = []
         self._redraw()
 
-    def set_classes(self, classes): self._classes = classes
-    def set_current_class(self, idx): self._current_class = idx
+    def set_classes(self, classes):
+        self._classes = classes
+
+    def set_current_class(self, idx):
+        self._current_class = idx
 
     def undo_last(self):
         if self._boxes:
@@ -51,7 +64,8 @@ class AnnotationCanvas(QLabel):
             cy = ((b["y1"] + b["y2"]) / 2) / h
             bw = abs(b["x2"] - b["x1"]) / w
             bh = abs(b["y2"] - b["y1"]) / h
-            lines.append(f"{b['class_id']} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+            lines.append(
+                f"{b['class_id']} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
         return lines
 
     def _scaled_size(self):
@@ -107,9 +121,11 @@ class AnnotationCanvas(QLabel):
             color = self._colors[b["class_id"] % len(self._colors)]
             painter.setPen(QPen(color, 2))
             rx, ry = int(b["x1"] * sx), int(b["y1"] * sy)
-            rw, rh = int((b["x2"] - b["x1"]) * sx), int((b["y2"] - b["y1"]) * sy)
+            rw = int((b["x2"] - b["x1"]) * sx)
+            rh = int((b["y2"] - b["y1"]) * sy)
             painter.drawRect(rx, ry, rw, rh)
-            cls_name = self._classes[b["class_id"]] if b["class_id"] < len(self._classes) else str(b["class_id"])
+            cls_name = self._classes[b["class_id"]] if b["class_id"] < len(
+                self._classes) else str(b["class_id"])
             painter.fillRect(rx, ry - 16, len(cls_name) * 8 + 4, 16, color)
             painter.setPen(QPen(Qt.GlobalColor.black))
             painter.drawText(rx + 2, ry - 3, cls_name)
@@ -118,8 +134,8 @@ class AnnotationCanvas(QLabel):
             x1 = min(self._start.x(), self._end.x())
             y1 = min(self._start.y(), self._end.y())
             painter.drawRect(x1, y1,
-                abs(self._end.x() - self._start.x()),
-                abs(self._end.y() - self._start.y()))
+                             abs(self._end.x() - self._start.x()),
+                             abs(self._end.y() - self._start.y()))
         painter.end()
         self.setPixmap(pix)
 
@@ -148,7 +164,8 @@ class AnnotationTab(QWidget):
         g2 = QVBoxLayout(grp_cls)
         self.class_combo = QComboBox()
         self.class_combo.addItems(["object"])
-        self.class_combo.currentIndexChanged.connect(lambda i: self.canvas.set_current_class(i))
+        self.class_combo.currentIndexChanged.connect(
+            lambda i: self.canvas.set_current_class(i))
         g2.addWidget(self.class_combo)
         btn_add_cls = QPushButton("➕ Добавить класс")
         btn_add_cls.clicked.connect(self._add_class)
@@ -201,14 +218,18 @@ class AnnotationTab(QWidget):
 
     def _open_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Папка")
-        if not folder: return
+        if not folder:
+            return
         self._folder = folder
         exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-        self._images = [os.path.join(folder, f) for f in sorted(os.listdir(folder))
-                        if os.path.splitext(f)[1].lower() in exts]
+        self._images = [
+            os.path.join(
+                folder, f) for f in sorted(
+                os.listdir(folder)) if os.path.splitext(f)[1].lower() in exts]
         self.img_list.clear()
         self.img_list.addItems([os.path.basename(p) for p in self._images])
-        if self._images: self.img_list.setCurrentRow(0)
+        if self._images:
+            self.img_list.setCurrentRow(0)
         self.status_lbl.setText(f"Загружено: {len(self._images)} изображений")
 
     def _load_image(self, idx):
@@ -218,16 +239,19 @@ class AnnotationTab(QWidget):
 
     def _navigate(self, delta):
         new_idx = self._current_idx + delta
-        if 0 <= new_idx < len(self._images): self.img_list.setCurrentRow(new_idx)
+        if 0 <= new_idx < len(self._images):
+            self.img_list.setCurrentRow(new_idx)
 
     def _add_class(self):
         name, ok = QInputDialog.getText(self, "Класс", "Название:")
         if ok and name.strip():
             self.class_combo.addItem(name.strip())
-            self.canvas.set_classes([self.class_combo.itemText(i) for i in range(self.class_combo.count())])
+            self.canvas.set_classes([self.class_combo.itemText(
+                i) for i in range(self.class_combo.count())])
 
     def _save_label(self):
-        if self._current_idx < 0: return
+        if self._current_idx < 0:
+            return
         img_path = self._images[self._current_idx]
         label_path = os.path.splitext(img_path)[0] + ".txt"
         with open(label_path, "w") as f:
@@ -237,7 +261,9 @@ class AnnotationTab(QWidget):
     def _save_all(self):
         self._save_label()
         if self._folder:
-            classes = [self.class_combo.itemText(i) for i in range(self.class_combo.count())]
+            classes = [
+                self.class_combo.itemText(i) for i in range(
+                    self.class_combo.count())]
             with open(os.path.join(self._folder, "classes.txt"), "w") as f:
                 f.write("\n".join(classes))
         self.status_lbl.setText("Все метки сохранены")

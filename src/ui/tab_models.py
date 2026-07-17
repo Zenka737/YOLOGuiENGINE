@@ -148,7 +148,8 @@ class ModelsTab(QWidget):
         self._download_thread = DownloadThread(model_name)
         self._download_thread.log.connect(lambda m: self.log_view.append(m))
         self._download_thread.progress.connect(self.progress_bar.setValue)
-        self._download_thread.error.connect(lambda e: self.log_view.append(f"❌ {e}"))
+        self._download_thread.error.connect(
+            lambda e: self.log_view.append(f"❌ {e}"))
         self._download_thread.finished.connect(self._on_download_done)
         self._download_thread.start()
         self.btn_download.setEnabled(False)
@@ -159,8 +160,10 @@ class ModelsTab(QWidget):
         self.log_view.append(f"✅ {path}")
 
     def _import_model(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Импорт", "", "YOLO Models (*.pt *.onnx)")
-        if not path: return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Импорт", "", "YOLO Models (*.pt *.onnx)")
+        if not path:
+            return
         dest = os.path.join(MODELS_DIR, os.path.basename(path))
         if os.path.exists(dest):
             self.log_view.append(f"⚠ Уже есть: {os.path.basename(path)}")
@@ -171,10 +174,14 @@ class ModelsTab(QWidget):
 
     def _delete_selected(self):
         item = self.local_list.currentItem()
-        if not item: return
+        if not item:
+            return
         path = item.data(Qt.ItemDataRole.UserRole)
         name = os.path.basename(path)
-        reply = QMessageBox.question(self, "Удаление", f"Удалить {name}?",
+        reply = QMessageBox.question(
+            self,
+            "Удаление",
+            f"Удалить {name}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             os.remove(path)
