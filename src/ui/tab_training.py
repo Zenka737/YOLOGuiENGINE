@@ -15,17 +15,46 @@ def _scan_cpu():
 
 
 def _scan_gpu():
-    """Returns list of (device_id, label) for all CUDA/MPS GPUs."""
+    """Returns list of (device_id, label) for all available GPUs."""
     found = []
+
+    # 1. CUDA GPUs via PyTorch
+    cuda_names = set()
     try:
         import torch
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
-                found.append((str(i), torch.cuda.get_device_name(i)))
+                name = torch.cuda.get_device_name(i)
+                found.append((str(i), f"{name} (CUDA)"))
+                cuda_names.add(name.lower())
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             found.append(("mps", "Apple MPS"))
     except Exception:
         pass
+
+    # 2. All GPUs via OS (Windows: wmic / Linux: lspci) — catches cards without CUDA
+    try:
+        import subprocess
+        import platform
+        if platform.system() == "Windows":
+            out = subprocess.check_output(
+                ["wmic", "path", "win32_VideoController", "get", "name"],
+                text=True, timeout=5, creationflags=0x08000000)
+            for line in out.splitlines():
+                name = line.strip()
+                if name and name.lower() != "name" and name.lower() not in cuda_names:
+                    found.append(("cpu", f"{name} (без CUDA — только CPU)"))
+        else:
+            out = subprocess.check_output(
+                ["lspci"], text=True, timeout=5, stderr=subprocess.DEVNULL)
+            for line in out.splitlines():
+                if "VGA" in line or "3D" in line or "Display" in line:
+                    name = line.split(":")[-1].strip()
+                    if name.lower() not in cuda_names:
+                        found.append(("cpu", f"{name} (без CUDA — только CPU)"))
+    except Exception:
+        pass
+
     return found
 
 
