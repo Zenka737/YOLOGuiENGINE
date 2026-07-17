@@ -98,6 +98,12 @@ class AnnotationCanvas(QLabel):
         self._selected = -1
         self._redraw()
 
+    def selected_box(self):
+        """Return the currently selected box dict or None."""
+        if 0 <= self._selected < len(self._boxes):
+            return self._boxes[self._selected]
+        return None
+
     def get_yolo_labels(self):
         lines = []
         for b in self._boxes:
@@ -150,12 +156,41 @@ class AnnotationCanvas(QLabel):
                 return i
         return -1
 
+    def _hit_suggestion(self, mx, my):
+        """Return index of suggestion box under (mx, my), or -1."""
+        for i in range(len(self._suggestions) - 1, -1, -1):
+            b = self._suggestions[i]
+            rx, ry, rw, rh = self._norm_to_disp(b["x"], b["y"], b["w"], b["h"])
+            if rx <= mx <= rx + rw and ry <= my <= ry + rh:
+                return i
+        return -1
+
     # ------------------------------------------------------------ mouse events
 
     def mousePressEvent(self, e):
-        if not self._pixmap_orig or e.button() != Qt.MouseButton.LeftButton:
+        if not self._pixmap_orig:
             return
         mx, my = int(e.position().x()), int(e.position().y())
+
+        # Right-click on suggestion → accept it
+        if e.button() == Qt.MouseButton.RightButton:
+            si = self._hit_suggestion(mx, my)
+            if si >= 0:
+                self._boxes.append(self._suggestions.pop(si))
+                self._selected = len(self._boxes) - 1
+                self._redraw()
+            return
+
+        # Left-click on suggestion → reject it
+        if e.button() == Qt.MouseButton.LeftButton and self._suggestions:
+            si = self._hit_suggestion(mx, my)
+            if si >= 0:
+                self._suggestions.pop(si)
+                self._redraw()
+                return
+
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
 
         # Corner handle on selected box?
         if self._selected >= 0:
@@ -300,33 +335,66 @@ class AnnotationCanvas(QLabel):
 # Background YOLO suggestion thread
 # ---------------------------------------------------------------------------
 
-class YoloSuggestThread(QThread):
-    """Run yolov8n.pt on an image and emit detected boxes in normalised coords."""
+class TemplateSuggestThread(QThread):
+    """Find regions similar to a template box using cv2.matchTemplate."""
 
     results = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, image_path, class_names):
+    def __init__(self, image_path, box, cls, threshold=0.55):
         super().__init__()
         self._image_path = image_path
-        self._class_names = [n.lower() for n in class_names]
+        self._box = box          # normalised YOLO dict
+        self._cls = cls
+        self._threshold = threshold
 
     def run(self):
         try:
-            from ultralytics import YOLO
-            model = YOLO("yolov8n.pt")
-            res = model(self._image_path, verbose=False)[0]
+            import cv2
+            import numpy as np
+            img = cv2.imread(self._image_path)
+            if img is None:
+                self.error.emit("Не удалось открыть изображение")
+                return
+            ih, iw = img.shape[:2]
+            b = self._box
+            tx = int((b["x"] - b["w"] / 2) * iw)
+            ty = int((b["y"] - b["h"] / 2) * ih)
+            tw = int(b["w"] * iw)
+            th = int(b["h"] * ih)
+            tx, ty = max(0, tx), max(0, ty)
+            tw, th = min(tw, iw - tx), min(th, ih - ty)
+            if tw < 8 or th < 8:
+                self.error.emit("Бокс слишком мал для поиска")
+                return
+            tmpl = img[ty:ty + th, tx:tx + tw]
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray_tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
             boxes = []
-            for box in res.boxes:
-                cls_id = int(box.cls[0])
-                yolo_name = model.names.get(cls_id, str(cls_id)).lower()
-                our_cls = 0
-                for i, name in enumerate(self._class_names):
-                    if name == yolo_name:
-                        our_cls = i
-                        break
-                xywhn = box.xywhn[0].tolist()
-                boxes.append({"class": our_cls, "x": xywhn[0], "y": xywhn[1], "w": xywhn[2], "h": xywhn[3]})
+            used = []
+            for scale in [0.8, 1.0, 1.2]:
+                sw = max(8, int(tw * scale))
+                sh = max(8, int(th * scale))
+                if sw > iw or sh > ih:
+                    continue
+                t_scaled = cv2.resize(gray_tmpl, (sw, sh))
+                res = cv2.matchTemplate(gray, t_scaled, cv2.TM_CCOEFF_NORMED)
+                locs = np.where(res >= self._threshold)
+                for pt_x, pt_y in zip(locs[1], locs[0]):
+                    # suppress duplicates within half template size
+                    dup = any(abs(pt_x - ux) < sw // 2 and abs(pt_y - uy) < sh // 2
+                              for ux, uy in used)
+                    if dup:
+                        continue
+                    used.append((pt_x, pt_y))
+                    cx = (pt_x + sw / 2) / iw
+                    cy = (pt_y + sh / 2) / ih
+                    nw = sw / iw
+                    nh = sh / ih
+                    # skip if nearly identical to the original template box
+                    if abs(cx - b["x"]) < 0.02 and abs(cy - b["y"]) < 0.02:
+                        continue
+                    boxes.append({"class": self._cls, "x": cx, "y": cy, "w": nw, "h": nh})
             self.results.emit(boxes)
         except Exception as ex:
             self.error.emit(str(ex))
@@ -527,17 +595,13 @@ class AnnotationTab(QWidget):
 
         grp_suggest = QGroupBox("Авто-выделение")
         g5 = QVBoxLayout(grp_suggest)
+        hint = QLabel("Выдели бокс → «Найти похожие»\nПКМ — принять, ЛКМ — отклонить")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #aaa; font-size: 10px;")
+        g5.addWidget(hint)
         self.btn_find = QPushButton("🔍 Найти похожие")
         self.btn_find.clicked.connect(self._find_similar)
         g5.addWidget(self.btn_find)
-        self.btn_accept = QPushButton("✅ Принять всё")
-        self.btn_accept.setVisible(False)
-        self.btn_accept.clicked.connect(self._accept_suggestions)
-        g5.addWidget(self.btn_accept)
-        self.btn_reject = QPushButton("❌ Отклонить")
-        self.btn_reject.setVisible(False)
-        self.btn_reject.clicked.connect(self._reject_suggestions)
-        g5.addWidget(self.btn_reject)
         left.addWidget(grp_suggest)
 
         self.status_lbl = QLabel("Откройте папку")
@@ -646,13 +710,17 @@ class AnnotationTab(QWidget):
         if self._current_idx < 0:
             self.status_lbl.setText("Откройте изображение")
             return
+        sel = self.canvas.selected_box()
+        if sel is None:
+            self.status_lbl.setText("⚠ Сначала выделите один объект боксом")
+            return
         if self._suggest_thread and self._suggest_thread.isRunning():
             return
         self.btn_find.setEnabled(False)
-        self.status_lbl.setText("Запуск yolov8n.pt…")
+        self.status_lbl.setText("Поиск похожих…")
         self.canvas.clear_suggestions()
-        self._suggest_thread = YoloSuggestThread(
-            self._images[self._current_idx], self._current_class_names())
+        self._suggest_thread = TemplateSuggestThread(
+            self._images[self._current_idx], sel, sel["class"])
         self._suggest_thread.results.connect(self._on_suggestions)
         self._suggest_thread.error.connect(self._on_suggest_error)
         self._suggest_thread.start()
@@ -660,27 +728,11 @@ class AnnotationTab(QWidget):
     def _on_suggestions(self, boxes):
         self.btn_find.setEnabled(True)
         if not boxes:
-            self.status_lbl.setText("Объекты не найдены")
+            self.status_lbl.setText("Похожих не найдено")
             return
         self.canvas.set_suggestions(boxes)
-        self.btn_accept.setVisible(True)
-        self.btn_reject.setVisible(True)
-        self.status_lbl.setText(f"Найдено: {len(boxes)} объектов (пунктир). Принять?")
+        self.status_lbl.setText(f"Найдено: {len(boxes)} (пунктир). ПКМ — принять, ЛКМ — отклонить")
 
     def _on_suggest_error(self, msg):
         self.btn_find.setEnabled(True)
-        self.status_lbl.setText(f"Ошибка YOLO: {msg}")
-
-    def _accept_suggestions(self):
-        self.canvas.accept_suggestions()
-        self._hide_suggestion_buttons()
-        self.status_lbl.setText("Предложения приняты")
-
-    def _reject_suggestions(self):
-        self.canvas.clear_suggestions()
-        self._hide_suggestion_buttons()
-        self.status_lbl.setText("Предложения отклонены")
-
-    def _hide_suggestion_buttons(self):
-        self.btn_accept.setVisible(False)
-        self.btn_reject.setVisible(False)
+        self.status_lbl.setText(f"Ошибка: {msg}")
