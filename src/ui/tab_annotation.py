@@ -354,10 +354,11 @@ class TemplateSuggestThread(QThread):
     results = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, image_path, box, cls, threshold=0.55):
+    def __init__(self, target_path, template_src, box, cls, threshold=0.6):
         super().__init__()
-        self._image_path = image_path
-        self._box = box          # normalised YOLO dict
+        self._target_path = target_path      # image to search in
+        self._template_src = template_src    # image the template was drawn on
+        self._box = box                      # normalised YOLO dict on template_src
         self._cls = cls
         self._threshold = threshold
 
@@ -365,27 +366,34 @@ class TemplateSuggestThread(QThread):
         try:
             import cv2
             import numpy as np
-            img = cv2.imread(self._image_path)
+            img = cv2.imread(self._target_path)
             if img is None:
                 self.error.emit("Не удалось открыть изображение")
                 return
+            src = cv2.imread(self._template_src)
+            if src is None:
+                self.error.emit("Не удалось открыть исходный кадр шаблона")
+                return
             ih, iw = img.shape[:2]
+            sh_src, sw_src = src.shape[:2]
             b = self._box
-            tx = int((b["x"] - b["w"] / 2) * iw)
-            ty = int((b["y"] - b["h"] / 2) * ih)
-            tw = int(b["w"] * iw)
-            th = int(b["h"] * ih)
+            # crop template from the image it was actually drawn on
+            tx = int((b["x"] - b["w"] / 2) * sw_src)
+            ty = int((b["y"] - b["h"] / 2) * sh_src)
+            tw = int(b["w"] * sw_src)
+            th = int(b["h"] * sh_src)
             tx, ty = max(0, tx), max(0, ty)
-            tw, th = min(tw, iw - tx), min(th, ih - ty)
+            tw, th = min(tw, sw_src - tx), min(th, sh_src - ty)
             if tw < 8 or th < 8:
                 self.error.emit("Бокс слишком мал для поиска")
                 return
-            tmpl = img[ty:ty + th, tx:tx + tw]
+            tmpl = src[ty:ty + th, tx:tx + tw]
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             gray_tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
+            same_image = os.path.normpath(self._target_path) == os.path.normpath(self._template_src)
             boxes = []
-            used = []
-            for scale in [0.8, 1.0, 1.2]:
+            scored = []
+            for scale in [0.6, 0.8, 1.0, 1.2, 1.4]:
                 sw = max(8, int(tw * scale))
                 sh = max(8, int(th * scale))
                 if sw > iw or sh > ih:
@@ -394,20 +402,24 @@ class TemplateSuggestThread(QThread):
                 res = cv2.matchTemplate(gray, t_scaled, cv2.TM_CCOEFF_NORMED)
                 locs = np.where(res >= self._threshold)
                 for pt_x, pt_y in zip(locs[1], locs[0]):
-                    # suppress duplicates within half template size
-                    dup = any(abs(pt_x - ux) < sw // 2 and abs(pt_y - uy) < sh // 2
-                              for ux, uy in used)
-                    if dup:
-                        continue
-                    used.append((pt_x, pt_y))
-                    cx = (pt_x + sw / 2) / iw
-                    cy = (pt_y + sh / 2) / ih
-                    nw = sw / iw
-                    nh = sh / ih
-                    # skip if nearly identical to the original template box
-                    if abs(cx - b["x"]) < 0.02 and abs(cy - b["y"]) < 0.02:
-                        continue
-                    boxes.append({"class": self._cls, "x": cx, "y": cy, "w": nw, "h": nh})
+                    score = float(res[pt_y, pt_x])
+                    scored.append((score, pt_x, pt_y, sw, sh))
+            # highest score first so best matches win during dedup
+            scored.sort(key=lambda t: t[0], reverse=True)
+            used = []
+            for score, pt_x, pt_y, sw, sh in scored:
+                cx = (pt_x + sw / 2) / iw
+                cy = (pt_y + sh / 2) / ih
+                dup = any(abs(cx - ucx) < 0.03 and abs(cy - ucy) < 0.03
+                          for ucx, ucy in used)
+                if dup:
+                    continue
+                # only skip the original box when searching the same image
+                if same_image and abs(cx - b["x"]) < 0.02 and abs(cy - b["y"]) < 0.02:
+                    continue
+                used.append((cx, cy))
+                boxes.append({"class": self._cls, "x": cx, "y": cy,
+                              "w": sw / iw, "h": sh / ih})
             self.results.emit(boxes)
         except Exception as ex:
             self.error.emit(str(ex))
@@ -542,6 +554,7 @@ class AnnotationTab(QWidget):
         self._folder = ""
         self._suggest_thread = None
         self._template_box = None   # persists across image navigation
+        self._template_src = None   # image path the template was cut from
         self._build_ui()
 
     def _build_ui(self):
@@ -734,6 +747,8 @@ class AnnotationTab(QWidget):
             self.status_lbl.setText("⚠ Сначала выделите бокс на холсте")
             return
         self._template_box = dict(sel)
+        # remember which image this template was cut from
+        self._template_src = self._images[self._current_idx]
         self.canvas.set_template_highlight(None)  # show only on next frames
         cls_name = self._current_class_names()[sel["class"]] if sel["class"] < self.class_combo.count() else "?"
         self.tmpl_lbl.setText(f"Шаблон: {cls_name} ✓")
@@ -744,9 +759,16 @@ class AnnotationTab(QWidget):
         if self._current_idx < 0:
             self.status_lbl.setText("Откройте изображение")
             return
-        # prefer currently selected box, fall back to saved template
-        sel = self.canvas.selected_box() or self._template_box
-        if sel is None:
+        # prefer currently selected box (cut from current image),
+        # fall back to the saved template (cut from its source image)
+        sel = self.canvas.selected_box()
+        if sel is not None:
+            box = sel
+            template_src = self._images[self._current_idx]
+        elif self._template_box is not None:
+            box = self._template_box
+            template_src = self._template_src or self._images[self._current_idx]
+        else:
             self.status_lbl.setText("⚠ Выделите бокс или нажмите «Запомнить выделенный»")
             return
         if self._suggest_thread and self._suggest_thread.isRunning():
@@ -755,7 +777,7 @@ class AnnotationTab(QWidget):
         self.status_lbl.setText("Поиск похожих…")
         self.canvas.clear_suggestions()
         self._suggest_thread = TemplateSuggestThread(
-            self._images[self._current_idx], sel, sel["class"])
+            self._images[self._current_idx], template_src, box, box["class"])
         self._suggest_thread.results.connect(self._on_suggestions)
         self._suggest_thread.error.connect(self._on_suggest_error)
         self._suggest_thread.start()
