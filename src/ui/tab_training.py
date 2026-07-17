@@ -1,4 +1,5 @@
 import os
+import json
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QFileDialog,
@@ -6,19 +7,17 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".yologuiengine_config.json")
+
 
 def _scan_cpu():
-    """Always available. Returns list of one (device_id, label)."""
     import platform
     name = platform.processor() or "CPU"
     return [("cpu", name)]
 
 
 def _scan_gpu():
-    """Returns list of (device_id, label) for all available GPUs."""
     found = []
-
-    # 1. CUDA GPUs via PyTorch
     cuda_names = set()
     try:
         import torch
@@ -32,7 +31,6 @@ def _scan_gpu():
     except Exception:
         pass
 
-    # 2. All GPUs via OS (Windows: wmic / Linux: lspci) — catches cards without CUDA
     try:
         import subprocess
         import platform
@@ -59,7 +57,6 @@ def _scan_gpu():
 
 
 def _scan_npu():
-    """Returns list of (device_id, label) for Intel NPU / OpenVINO."""
     found = []
     try:
         import openvino.runtime as ov
@@ -110,7 +107,9 @@ class TrainingTab(QWidget):
     def __init__(self):
         super().__init__()
         self.train_thread = None
+        self._devices_raw = []
         self._build_ui()
+        self._load_config()
 
     def _build_ui(self):
         main = QHBoxLayout(self)
@@ -165,7 +164,6 @@ class TrainingTab(QWidget):
         g3.addLayout(row("LR:", self.lr_spin))
         left.addWidget(grp_params)
 
-        # --- Device selector ---
         grp_device = QGroupBox("Устройство")
         gd = QVBoxLayout(grp_device)
 
@@ -188,10 +186,13 @@ class TrainingTab(QWidget):
         self.device_status_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
         gd.addWidget(self.device_status_lbl)
 
+        btn_save_cfg = QPushButton("💾 Сохранить конфигурацию")
+        btn_save_cfg.clicked.connect(self._save_config)
+        gd.addWidget(btn_save_cfg)
+
         self._dev_btn_group.idClicked.connect(self._on_device_type_changed)
         left.addWidget(grp_device)
 
-        # Trigger initial scan for CPU
         self._on_device_type_changed(0)
 
         grp_out = QGroupBox("Папка")
@@ -252,8 +253,7 @@ class TrainingTab(QWidget):
             self.device_status_lbl.setStyleSheet("")
         else:
             self.device_combo.setVisible(False)
-            name = dtype.upper()
-            self.device_status_lbl.setText(f"❌ {name} не найден")
+            self.device_status_lbl.setText(f"❌ {dtype.upper()} не найден")
             self.device_status_lbl.setStyleSheet("color: #ff4444; font-weight: bold;")
 
     def _selected_device(self):
@@ -263,6 +263,58 @@ class TrainingTab(QWidget):
         if i < 0 or i >= len(self._devices_raw):
             return self._devices_raw[0]
         return self._devices_raw[i]
+
+    def _save_config(self):
+        cfg = {
+            "device_type": self._dev_btn_group.checkedButton().property("devtype"),
+            "device_index": self.device_combo.currentIndex(),
+            "model": self.model_combo.currentText(),
+            "epochs": self.epochs_spin.value(),
+            "batch": self.batch_spin.value(),
+            "imgsz": self.imgsz_combo.currentText(),
+            "lr": self.lr_spin.value(),
+            "data": getattr(self, "_data_path", ""),
+            "project": getattr(self, "_out_path", "runs/train"),
+        }
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        self.log_view.append("✅ Конфигурация сохранена")
+
+    def _load_config(self):
+        if not os.path.exists(CONFIG_PATH):
+            return
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            return
+
+        dtype = cfg.get("device_type", "cpu")
+        for btn_id in range(3):
+            btn = self._dev_btn_group.button(btn_id)
+            if btn and btn.property("devtype") == dtype:
+                btn.setChecked(True)
+                self._on_device_type_changed(btn_id)
+                break
+
+        if cfg.get("model"):
+            idx = self.model_combo.findText(cfg["model"])
+            if idx >= 0:
+                self.model_combo.setCurrentIndex(idx)
+
+        self.epochs_spin.setValue(cfg.get("epochs", 50))
+        self.batch_spin.setValue(cfg.get("batch", 16))
+        if cfg.get("imgsz"):
+            self.imgsz_combo.setCurrentText(str(cfg["imgsz"]))
+        self.lr_spin.setValue(cfg.get("lr", 0.01))
+
+        if cfg.get("data") and os.path.exists(cfg["data"]):
+            self._data_path = cfg["data"]
+            self.data_lbl.setText(f"data.yaml: {os.path.basename(cfg['data'])}")
+
+        if cfg.get("project"):
+            self._out_path = cfg["project"]
+            self.out_lbl.setText(cfg["project"])
 
     def _browse_data(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -293,6 +345,14 @@ class TrainingTab(QWidget):
                 "  val:   images/val\n"
                 "  nc:    1\n"
                 "  names: ['class1']")
+        # Check that paths actually exist
+        for key in ("train", "val"):
+            p = cfg.get(key, "")
+            if p and not os.path.exists(p):
+                return (
+                    f"Путь '{key}' не существует:\n{p}\n\n"
+                    "Проверьте пути в data.yaml — они должны быть абсолютными "
+                    "и указывать на реальные папки с изображениями.")
         return None
 
     def _start_train(self):
@@ -308,6 +368,7 @@ class TrainingTab(QWidget):
             self.log_view.append("❌ Выбранное устройство недоступно")
             return
         device = self._selected_device()
+        dev_label = self.device_combo.currentText() or device.upper()
         params = {
             "model": self.model_combo.currentText(),
             "data": data,
@@ -328,7 +389,7 @@ class TrainingTab(QWidget):
         self.train_thread.start()
         self.btn_train.setEnabled(False)
         self.btn_stop_train.setEnabled(True)
-        self.log_view.append(f"▶ Обучение запущено на {device.upper()}...")
+        self.log_view.append(f"▶ Обучение запущено на: {dev_label}")
 
     def _stop_train(self):
         if self.train_thread:
