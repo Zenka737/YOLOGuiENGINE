@@ -1,18 +1,24 @@
 import os
 from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QPushButton,
-    QLabel,
-    QSpinBox,
-    QDoubleSpinBox,
-    QComboBox,
-    QGroupBox,
-    QFileDialog,
-    QTextEdit,
-    QProgressBar)
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+    QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QFileDialog,
+    QTextEdit, QProgressBar
+)
 from PyQt6.QtCore import QThread, pyqtSignal
+
+
+def _detect_devices():
+    """Return list of available device strings for YOLO training."""
+    devices = ["cpu"]
+    try:
+        import torch
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                name = torch.cuda.get_device_name(i)
+                devices.append(f"{i}  —  {name}")
+    except Exception:
+        pass
+    return devices
 
 
 class TrainThread(QThread):
@@ -31,10 +37,14 @@ class TrainThread(QThread):
             model = YOLO(self.params["model"])
             self.log.emit(f"Начало обучения: {self.params}")
             model.train(
-                data=self.params["data"], epochs=self.params["epochs"],
-                imgsz=self.params["imgsz"], batch=self.params["batch"],
-                lr0=self.params["lr"], project=self.params["project"],
+                data=self.params["data"],
+                epochs=self.params["epochs"],
+                imgsz=self.params["imgsz"],
+                batch=self.params["batch"],
+                lr0=self.params["lr"],
+                project=self.params["project"],
                 name=self.params["name"],
+                device=self.params["device"],
             )
             self.log.emit("Обучение завершено!")
             self.log.emit(
@@ -82,6 +92,7 @@ class TrainingTab(QWidget):
             h.addWidget(QLabel(label))
             h.addWidget(widget)
             return h
+
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setRange(1, 1000)
         self.epochs_spin.setValue(50)
@@ -102,6 +113,17 @@ class TrainingTab(QWidget):
         self.lr_spin.setValue(0.01)
         g3.addLayout(row("LR:", self.lr_spin))
         left.addWidget(grp_params)
+
+        grp_device = QGroupBox("Устройство")
+        g5 = QVBoxLayout(grp_device)
+        self.device_combo = QComboBox()
+        self._devices_raw = []
+        self._refresh_devices()
+        btn_refresh = QPushButton("🔄 Обновить")
+        btn_refresh.clicked.connect(self._refresh_devices)
+        g5.addWidget(self.device_combo)
+        g5.addWidget(btn_refresh)
+        left.addWidget(grp_device)
 
         grp_out = QGroupBox("Папка")
         g4 = QVBoxLayout(grp_out)
@@ -139,6 +161,25 @@ class TrainingTab(QWidget):
         right_w = QWidget()
         right_w.setLayout(right)
         main.addWidget(right_w)
+
+    def _refresh_devices(self):
+        self.device_combo.clear()
+        devices = _detect_devices()
+        self._devices_raw = []
+        for d in devices:
+            if d == "cpu":
+                self.device_combo.addItem("CPU")
+                self._devices_raw.append("cpu")
+            else:
+                idx, name = d.split("  —  ", 1)
+                self.device_combo.addItem(f"GPU {idx.strip()}  —  {name}")
+                self._devices_raw.append(idx.strip())
+
+    def _selected_device(self):
+        i = self.device_combo.currentIndex()
+        if i < 0 or i >= len(self._devices_raw):
+            return "cpu"
+        return self._devices_raw[i]
 
     def _browse_data(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -180,19 +221,17 @@ class TrainingTab(QWidget):
         if err:
             self.log_view.append(f"❌ {err}")
             return
+        device = self._selected_device()
         params = {
             "model": self.model_combo.currentText(),
             "data": data,
             "epochs": self.epochs_spin.value(),
             "batch": self.batch_spin.value(),
-            "imgsz": int(
-                self.imgsz_combo.currentText()),
+            "imgsz": int(self.imgsz_combo.currentText()),
             "lr": self.lr_spin.value(),
-            "project": getattr(
-                self,
-                "_out_path",
-                "runs/train"),
+            "project": getattr(self, "_out_path", "runs/train"),
             "name": "yologuiengine_train",
+            "device": device,
         }
         self.train_thread = TrainThread(params)
         self.train_thread.log.connect(lambda m: self.log_view.append(m))
@@ -203,7 +242,7 @@ class TrainingTab(QWidget):
         self.train_thread.start()
         self.btn_train.setEnabled(False)
         self.btn_stop_train.setEnabled(True)
-        self.log_view.append("▶ Обучение запущено...")
+        self.log_view.append(f"▶ Обучение запущено на {device.upper()}...")
 
     def _stop_train(self):
         if self.train_thread:
