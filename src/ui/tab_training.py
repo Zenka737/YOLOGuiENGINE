@@ -3,11 +3,80 @@ import json
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QFileDialog,
-    QTextEdit, QProgressBar, QButtonGroup, QRadioButton
+    QTextEdit, QProgressBar, QButtonGroup, QRadioButton,
+    QDialog, QLineEdit, QFormLayout, QDialogButtonBox
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".yologuiengine_config.json")
+
+
+class YamlPathDialog(QDialog):
+    """Dialog to manually set train/val paths in data.yaml."""
+
+    def __init__(self, cfg: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Пути к датасету")
+        self.setMinimumWidth(500)
+        layout = QVBoxLayout(self)
+
+        info = QLabel(
+            "Укажите папки images/train и images/val.\n"
+            "Пути должны быть абсолютными и папки должны существовать.")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QFormLayout()
+
+        self.train_edit = QLineEdit(cfg.get("train", ""))
+        btn_train = QPushButton("📂")
+        btn_train.setFixedWidth(32)
+        btn_train.clicked.connect(lambda: self._pick(self.train_edit))
+        row_train = QHBoxLayout()
+        row_train.addWidget(self.train_edit)
+        row_train.addWidget(btn_train)
+        form.addRow("train (папка с фото):", row_train)
+
+        self.val_edit = QLineEdit(cfg.get("val", ""))
+        btn_val = QPushButton("📂")
+        btn_val.setFixedWidth(32)
+        btn_val.clicked.connect(lambda: self._pick(self.val_edit))
+        row_val = QHBoxLayout()
+        row_val.addWidget(self.val_edit)
+        row_val.addWidget(btn_val)
+        form.addRow("val (папка с фото):", row_val)
+
+        layout.addLayout(form)
+
+        self.status_lbl = QLabel("")
+        self.status_lbl.setWordWrap(True)
+        layout.addWidget(self.status_lbl)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self._validate_and_accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _pick(self, edit: QLineEdit):
+        path = QFileDialog.getExistingDirectory(self, "Выберите папку")
+        if path:
+            edit.setText(path)
+
+    def _validate_and_accept(self):
+        errors = []
+        for name, edit in (("train", self.train_edit), ("val", self.val_edit)):
+            p = edit.text().strip()
+            if p and not os.path.isdir(p):
+                errors.append(f"❌ Папка '{name}' не найдена:\n  {p}")
+        if errors:
+            self.status_lbl.setText("\n".join(errors))
+            self.status_lbl.setStyleSheet("color: #ff4444;")
+            return
+        self.accept()
+
+    def get_paths(self):
+        return self.train_edit.text().strip(), self.val_edit.text().strip()
 
 
 def _scan_cpu():
@@ -335,29 +404,29 @@ class TrainingTab(QWidget):
             return
         try:
             with open(data, "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
+                cfg = yaml.safe_load(f) or {}
         except Exception as e:
             self.log_view.append(f"❌ Не удалось прочитать yaml: {e}")
             return
 
-        yaml_dir = os.path.dirname(os.path.abspath(data))
+        dlg = YamlPathDialog(cfg, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_train, new_val = dlg.get_paths()
         changed = []
-        for key in ("train", "val", "test"):
-            val = cfg.get(key)
-            if not val:
-                continue
-            if not os.path.isabs(val):
-                abs_path = os.path.normpath(os.path.join(yaml_dir, val))
-                cfg[key] = abs_path.replace("\\", "/")
-                changed.append(f"  {key}: {val}  →  {cfg[key]}")
+        for key, new_val_path in (("train", new_train), ("val", new_val)):
+            if new_val_path and new_val_path != cfg.get(key, ""):
+                changed.append(f"  {key}: {cfg.get(key, '')}  →  {new_val_path}")
+                cfg[key] = new_val_path.replace("\\", "/")
 
         if not changed:
-            self.log_view.append("✅ Пути уже абсолютные, ничего не изменено")
+            self.log_view.append("ℹ Пути не изменены")
             return
 
         with open(data, "w", encoding="utf-8") as f:
             yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
-        self.log_view.append("✅ Пути исправлены:\n" + "\n".join(changed))
+        self.log_view.append("✅ Пути сохранены в yaml:\n" + "\n".join(changed))
 
     def _browse_data(self):
         path, _ = QFileDialog.getOpenFileName(
