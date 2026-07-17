@@ -86,6 +86,7 @@ def _scan_cpu():
 
 
 def _scan_gpu():
+    """Return list of (device_id, label) for usable GPU devices only."""
     found = []
     cuda_names = set()
     try:
@@ -93,13 +94,18 @@ def _scan_gpu():
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 name = torch.cuda.get_device_name(i)
-                found.append((str(i), f"{name} (CUDA)"))
+                found.append((str(i), f"{name} (CUDA:{i})"))
                 cuda_names.add(name.lower())
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             found.append(("mps", "Apple MPS"))
     except Exception:
         pass
+    return found
 
+
+def _scan_gpu_info():
+    """Return names of all detected GPUs (including non-CUDA) for info display."""
+    names = []
     try:
         import subprocess
         import platform
@@ -109,20 +115,17 @@ def _scan_gpu():
                 text=True, timeout=5, creationflags=0x08000000)
             for line in out.splitlines():
                 name = line.strip()
-                if name and name.lower() != "name" and name.lower() not in cuda_names:
-                    found.append(("cpu", f"{name} (без CUDA — только CPU)"))
+                if name and name.lower() != "name":
+                    names.append(name)
         else:
             out = subprocess.check_output(
                 ["lspci"], text=True, timeout=5, stderr=subprocess.DEVNULL)
             for line in out.splitlines():
                 if "VGA" in line or "3D" in line or "Display" in line:
-                    name = line.split(":")[-1].strip()
-                    if name.lower() not in cuda_names:
-                        found.append(("cpu", f"{name} (без CUDA — только CPU)"))
+                    names.append(line.split(":")[-1].strip())
     except Exception:
         pass
-
-    return found
+    return names
 
 
 def _scan_npu():
@@ -333,7 +336,18 @@ class TrainingTab(QWidget):
             self.device_status_lbl.setStyleSheet("")
         else:
             self.device_combo.setVisible(False)
-            self.device_status_lbl.setText(f"❌ {dtype.upper()} не найден")
+            if dtype == "gpu":
+                gpu_names = _scan_gpu_info()
+                if gpu_names:
+                    names_str = ", ".join(gpu_names)
+                    msg = (
+                        f"❌ CUDA недоступна.\nНайдены GPU: {names_str}\n"
+                        "Установите CUDA-драйверы NVIDIA или используйте CPU.")
+                else:
+                    msg = "❌ GPU не найден"
+            else:
+                msg = f"❌ {dtype.upper()} не найден"
+            self.device_status_lbl.setText(msg)
             self.device_status_lbl.setStyleSheet("color: #ff4444; font-weight: bold;")
 
     def _selected_device(self):
