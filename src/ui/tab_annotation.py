@@ -736,3 +736,6 @@ class AnnotationTab(QWidget):
     def _on_suggest_error(self, msg):
         self.btn_find.setEnabled(True)
         self.status_lbl.setText(f"Ошибка: {msg}")
+
+    def _hide_suggestion_buttons(self):
+        pass
