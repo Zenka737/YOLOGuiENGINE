@@ -23,6 +23,7 @@ class DetectionTab(QWidget):
         self.thread.status_update.connect(self._on_status)
         self.thread.error.connect(self._on_error)
         self._build_ui()
+        self._rebuild_camera_list()
 
     def _build_ui(self):
         main = QHBoxLayout(self)
@@ -44,7 +45,6 @@ class DetectionTab(QWidget):
         g2 = QVBoxLayout(grp_src)
         self.src_combo = QComboBox()
         self._camera_indices = []
-        self._rebuild_camera_list()
         self.src_combo.currentIndexChanged.connect(self._on_source_change)
         g2.addWidget(self.src_combo)
         btn_refresh_cam = QPushButton("🔄 Найти камеры")
