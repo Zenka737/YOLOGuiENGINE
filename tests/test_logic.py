@@ -188,7 +188,8 @@ def test_scan_cpu_always_returns_entry():
     sys.modules["PyQt6.QtCore"].Qt = types.SimpleNamespace(AlignmentFlag=types.SimpleNamespace(AlignLeft=0))
     for attr in ("QWidget", "QVBoxLayout", "QHBoxLayout", "QPushButton", "QLabel",
                  "QSpinBox", "QDoubleSpinBox", "QComboBox", "QGroupBox", "QFileDialog",
-                 "QTextEdit", "QProgressBar", "QButtonGroup", "QRadioButton"):
+                 "QTextEdit", "QProgressBar", "QButtonGroup", "QRadioButton",
+                 "QDialog", "QLineEdit", "QFormLayout", "QDialogButtonBox"):
         setattr(sys.modules["PyQt6.QtWidgets"], attr, object)
 
     spec = importlib.util.spec_from_file_location(
@@ -217,7 +218,8 @@ def test_scan_gpu_no_torch(monkeypatch):
     sys.modules["PyQt6.QtCore"].Qt = types.SimpleNamespace(AlignmentFlag=types.SimpleNamespace(AlignLeft=0))
     for attr in ("QWidget", "QVBoxLayout", "QHBoxLayout", "QPushButton", "QLabel",
                  "QSpinBox", "QDoubleSpinBox", "QComboBox", "QGroupBox", "QFileDialog",
-                 "QTextEdit", "QProgressBar", "QButtonGroup", "QRadioButton"):
+                 "QTextEdit", "QProgressBar", "QButtonGroup", "QRadioButton",
+                 "QDialog", "QLineEdit", "QFormLayout", "QDialogButtonBox"):
         setattr(sys.modules["PyQt6.QtWidgets"], attr, object)
 
     spec = importlib.util.spec_from_file_location(
