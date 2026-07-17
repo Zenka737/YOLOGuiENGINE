@@ -528,6 +528,7 @@ class AnnotationTab(QWidget):
         self._current_idx = -1
         self._folder = ""
         self._suggest_thread = None
+        self._template_box = None   # persists across image navigation
         self._build_ui()
 
     def _build_ui(self):
@@ -602,6 +603,13 @@ class AnnotationTab(QWidget):
         self.btn_find = QPushButton("🔍 Найти похожие")
         self.btn_find.clicked.connect(self._find_similar)
         g5.addWidget(self.btn_find)
+        self.tmpl_lbl = QLabel("Шаблон: не задан")
+        self.tmpl_lbl.setWordWrap(True)
+        self.tmpl_lbl.setStyleSheet("color: #aaa; font-size: 10px;")
+        g5.addWidget(self.tmpl_lbl)
+        btn_set_tmpl = QPushButton("📌 Запомнить выделенный")
+        btn_set_tmpl.clicked.connect(self._set_template)
+        g5.addWidget(btn_set_tmpl)
         left.addWidget(grp_suggest)
 
         self.status_lbl = QLabel("Откройте папку")
@@ -706,13 +714,25 @@ class AnnotationTab(QWidget):
 
     # --------------------------------------------------------- YOLO suggest
 
+    def _set_template(self):
+        sel = self.canvas.selected_box()
+        if sel is None:
+            self.status_lbl.setText("⚠ Сначала выделите бокс на холсте")
+            return
+        self._template_box = dict(sel)
+        cls_name = self._current_class_names()[sel["class"]] if sel["class"] < self.class_combo.count() else "?"
+        self.tmpl_lbl.setText(f"Шаблон: {cls_name} ✓")
+        self.tmpl_lbl.setStyleSheet("color: #80ff80; font-size: 10px;")
+        self.status_lbl.setText("✅ Шаблон сохранён — переходи к следующему кадру")
+
     def _find_similar(self):
         if self._current_idx < 0:
             self.status_lbl.setText("Откройте изображение")
             return
-        sel = self.canvas.selected_box()
+        # prefer currently selected box, fall back to saved template
+        sel = self.canvas.selected_box() or self._template_box
         if sel is None:
-            self.status_lbl.setText("⚠ Сначала выделите один объект боксом")
+            self.status_lbl.setText("⚠ Выделите бокс или нажмите «Запомнить выделенный»")
             return
         if self._suggest_thread and self._suggest_thread.isRunning():
             return
