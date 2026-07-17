@@ -139,10 +139,33 @@ class TrainingTab(QWidget):
             self._out_path = path
             self.out_lbl.setText(path)
 
+    def _validate_yaml(self, path):
+        import yaml
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+        except Exception as e:
+            return f"Не удалось прочитать yaml: {e}"
+        missing = [k for k in ("train", "val") if k not in cfg]
+        if missing:
+            return (
+                f"В файле data.yaml отсутствуют обязательные поля: {', '.join(missing)}.\n"
+                "Добавьте в yaml:\n"
+                "  train: images/train\n"
+                "  val:   images/val\n"
+                "  nc:    1\n"
+                "  names: ['class1']"
+            )
+        return None
+
     def _start_train(self):
         data = getattr(self, "_data_path", None)
         if not data:
             self.log_view.append("⚠ Выберите data.yaml")
+            return
+        err = self._validate_yaml(data)
+        if err:
+            self.log_view.append(f"❌ {err}")
             return
         params = {
             "model": self.model_combo.currentText(), "data": data,
