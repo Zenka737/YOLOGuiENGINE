@@ -656,7 +656,7 @@ class AnnotationTab(QWidget):
             path = self._images[idx]
             self.canvas.load_image(path)
             self.canvas.load_boxes_from_labels(self._label_path_for(path))
-            self._hide_suggestion_buttons()
+            self.canvas.clear_suggestions()
 
     def _navigate(self, delta):
         new_idx = self._current_idx + delta
