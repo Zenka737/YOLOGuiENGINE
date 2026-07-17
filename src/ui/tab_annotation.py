@@ -8,35 +8,60 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QMessageBox, QDialog, QSpinBox, QLineEdit, QFormLayout,
     QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtCore import Qt, QPoint, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
+
+HANDLE_SIZE = 8  # pixels for corner resize handles
 
 
 class AnnotationCanvas(QLabel):
+    """Interactive canvas: draw, select, resize and delete bounding boxes."""
+
     def __init__(self):
         super().__init__()
-        self.setAlignment(
-            Qt.AlignmentFlag.AlignTop
-            | Qt.AlignmentFlag.AlignLeft)
+        self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.setStyleSheet("border: 2px solid #2d4a7a; background: #0d1b2e;")
-        self.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(400, 400)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._pixmap_orig = None
-        self._boxes = []
+        self._boxes = []        # list of {"class": int, "x", "y", "w", "h"} — YOLO normalised
+        self._suggestions = []  # same format, rendered dashed
+        self._selected = -1
         self._classes = ["object"]
         self._current_class = 0
-        self._drawing = False
-        self._start = QPoint()
-        self._end = QPoint()
+        self._drag_mode = None  # "draw" | "move" | "resize_NW/NE/SW/SE"
+        self._drag_start = QPoint()
+        self._drag_cur = QPoint()
+        self._drag_box_orig = None
         self._colors = [
             QColor(255, 80, 80), QColor(80, 255, 80), QColor(80, 180, 255),
             QColor(255, 200, 0), QColor(200, 80, 255), QColor(0, 255, 200)]
 
+    # ------------------------------------------------------------------ public
+
     def load_image(self, path):
         self._pixmap_orig = QPixmap(path)
         self._boxes = []
+        self._suggestions = []
+        self._selected = -1
+        self._drag_mode = None
+        self._redraw()
+
+    def load_boxes_from_labels(self, label_path):
+        """Populate boxes from an existing YOLO .txt label file."""
+        self._boxes = []
+        self._selected = -1
+        if not os.path.exists(label_path):
+            self._redraw()
+            return
+        with open(label_path, "r") as fh:
+            for line in fh:
+                parts = line.strip().split()
+                if len(parts) == 5:
+                    cls = int(parts[0])
+                    x, y, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+                    self._boxes.append({"class": cls, "x": x, "y": y, "w": w, "h": h})
         self._redraw()
 
     def set_classes(self, classes):
@@ -45,30 +70,44 @@ class AnnotationCanvas(QLabel):
     def set_current_class(self, idx):
         self._current_class = idx
 
+    def set_suggestions(self, boxes):
+        """Display suggestion boxes (dashed orange)."""
+        self._suggestions = list(boxes)
+        self._redraw()
+
+    def accept_suggestions(self):
+        """Move all suggestion boxes into confirmed boxes."""
+        self._boxes.extend(self._suggestions)
+        self._suggestions = []
+        self._redraw()
+
+    def clear_suggestions(self):
+        self._suggestions = []
+        self._redraw()
+
     def undo_last(self):
         if self._boxes:
             self._boxes.pop()
+            if self._selected >= len(self._boxes):
+                self._selected = -1
             self._redraw()
 
     def clear_boxes(self):
         self._boxes.clear()
+        self._suggestions.clear()
+        self._selected = -1
         self._redraw()
 
     def get_yolo_labels(self):
-        if not self._pixmap_orig:
-            return []
-        w, h = self._pixmap_orig.width(), self._pixmap_orig.height()
         lines = []
         for b in self._boxes:
-            cx = ((b["x1"] + b["x2"]) / 2) / w
-            cy = ((b["y1"] + b["y2"]) / 2) / h
-            bw = abs(b["x2"] - b["x1"]) / w
-            bh = abs(b["y2"] - b["y1"]) / h
-            lines.append(
-                f"{b['class_id']} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+            lines.append(f"{b['class']} {b['x']:.6f} {b['y']:.6f} {b['w']:.6f} {b['h']:.6f}")
         return lines
 
-    def _scaled_size(self):
+    # ---------------------------------------------------------------- geometry
+
+    def _disp_size(self):
+        """Return (dw, dh) of the scaled image rendered on the canvas."""
         if not self._pixmap_orig:
             return self.width(), self.height()
         pix = self._pixmap_orig.scaled(
@@ -76,32 +115,141 @@ class AnnotationCanvas(QLabel):
             Qt.TransformationMode.FastTransformation)
         return pix.width(), pix.height()
 
+    def _norm_to_disp(self, x, y, w, h):
+        """Normalised YOLO box → display pixel rect (rx, ry, rw, rh)."""
+        dw, dh = self._disp_size()
+        rx = int((x - w / 2) * dw)
+        ry = int((y - h / 2) * dh)
+        rw = int(w * dw)
+        rh = int(h * dh)
+        return rx, ry, rw, rh
+
+    def _disp_to_norm(self, rx, ry, rw, rh):
+        """Display pixel rect → normalised YOLO box (x, y, w, h)."""
+        dw, dh = self._disp_size()
+        if dw == 0 or dh == 0:
+            return 0.0, 0.0, 0.0, 0.0
+        return (rx + rw / 2) / dw, (ry + rh / 2) / dh, rw / dw, rh / dh
+
+    def _hit_corner(self, box, mx, my):
+        """Return corner label ('NW','NE','SW','SE') if mouse is near a handle."""
+        rx, ry, rw, rh = self._norm_to_disp(box["x"], box["y"], box["w"], box["h"])
+        corners = [("NW", (rx, ry)), ("NE", (rx + rw, ry)),
+                   ("SW", (rx, ry + rh)), ("SE", (rx + rw, ry + rh))]
+        for name, (cx, cy) in corners:
+            if abs(mx - cx) <= HANDLE_SIZE and abs(my - cy) <= HANDLE_SIZE:
+                return name
+        return None
+
+    def _hit_box(self, mx, my):
+        """Return index of the topmost box under (mx, my), or -1."""
+        for i in range(len(self._boxes) - 1, -1, -1):
+            b = self._boxes[i]
+            rx, ry, rw, rh = self._norm_to_disp(b["x"], b["y"], b["w"], b["h"])
+            if rx <= mx <= rx + rw and ry <= my <= ry + rh:
+                return i
+        return -1
+
+    # ------------------------------------------------------------ mouse events
+
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and self._pixmap_orig:
-            self._drawing = True
-            self._start = e.position().toPoint()
-            self._end = self._start
+        if not self._pixmap_orig or e.button() != Qt.MouseButton.LeftButton:
+            return
+        mx, my = int(e.position().x()), int(e.position().y())
+
+        # Corner handle on selected box?
+        if self._selected >= 0:
+            corner = self._hit_corner(self._boxes[self._selected], mx, my)
+            if corner:
+                self._drag_mode = f"resize_{corner}"
+                self._drag_start = QPoint(mx, my)
+                self._drag_box_orig = dict(self._boxes[self._selected])
+                return
+
+        # Click on existing box?
+        hit = self._hit_box(mx, my)
+        if hit >= 0:
+            self._selected = hit
+            self._drag_mode = "move"
+            self._drag_start = QPoint(mx, my)
+            self._drag_box_orig = dict(self._boxes[hit])
+            self._redraw()
+            return
+
+        # Start drawing a new box
+        self._selected = -1
+        self._drag_mode = "draw"
+        self._drag_start = QPoint(mx, my)
+        self._drag_cur = QPoint(mx, my)
+        self._redraw()
 
     def mouseMoveEvent(self, e):
-        if self._drawing:
-            self._end = e.position().toPoint()
-            self._redraw()
+        if self._drag_mode is None:
+            return
+        mx, my = int(e.position().x()), int(e.position().y())
+        dw, dh = self._disp_size()
+
+        if self._drag_mode == "draw":
+            self._drag_cur = QPoint(mx, my)
+
+        elif self._drag_mode == "move":
+            dx = (mx - self._drag_start.x()) / dw
+            dy = (my - self._drag_start.y()) / dh
+            orig = self._drag_box_orig
+            b = self._boxes[self._selected]
+            b["x"] = max(0.0, min(1.0, orig["x"] + dx))
+            b["y"] = max(0.0, min(1.0, orig["y"] + dy))
+
+        elif self._drag_mode.startswith("resize_"):
+            corner = self._drag_mode[7:]
+            orig = self._drag_box_orig
+            b = self._boxes[self._selected]
+            x1 = orig["x"] - orig["w"] / 2
+            y1 = orig["y"] - orig["h"] / 2
+            x2 = orig["x"] + orig["w"] / 2
+            y2 = orig["y"] + orig["h"] / 2
+            nx, ny = mx / dw, my / dh
+            if "W" in corner:
+                x1 = max(0.0, min(nx, x2 - 0.01))
+            if "E" in corner:
+                x2 = min(1.0, max(nx, x1 + 0.01))
+            if "N" in corner:
+                y1 = max(0.0, min(ny, y2 - 0.01))
+            if "S" in corner:
+                y2 = min(1.0, max(ny, y1 + 0.01))
+            b["x"] = (x1 + x2) / 2
+            b["y"] = (y1 + y2) / 2
+            b["w"] = x2 - x1
+            b["h"] = y2 - y1
+
+        self._redraw()
 
     def mouseReleaseEvent(self, e):
-        if self._drawing and self._pixmap_orig:
-            self._drawing = False
-            x1, y1 = self._start.x(), self._start.y()
-            x2, y2 = self._end.x(), self._end.y()
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        mx, my = int(e.position().x()), int(e.position().y())
+
+        if self._drag_mode == "draw":
+            x1, y1 = self._drag_start.x(), self._drag_start.y()
+            x2, y2 = mx, my
             if abs(x2 - x1) > 5 and abs(y2 - y1) > 5:
-                pw, ph = self._pixmap_orig.width(), self._pixmap_orig.height()
-                disp_w, disp_h = self._scaled_size()
-                sx, sy = pw / disp_w, ph / disp_h
-                self._boxes.append({
-                    "class_id": self._current_class,
-                    "x1": int(min(x1, x2) * sx), "y1": int(min(y1, y2) * sy),
-                    "x2": int(max(x1, x2) * sx), "y2": int(max(y1, y2) * sy),
-                })
+                rx, ry = min(x1, x2), min(y1, y2)
+                rw, rh = abs(x2 - x1), abs(y2 - y1)
+                nx, ny, nw, nh = self._disp_to_norm(rx, ry, rw, rh)
+                self._boxes.append({"class": self._current_class, "x": nx, "y": ny, "w": nw, "h": nh})
+                self._selected = len(self._boxes) - 1
+
+        self._drag_mode = None
+        self._drag_box_orig = None
+        self._redraw()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key.Key_Delete and self._selected >= 0:
+            self._boxes.pop(self._selected)
+            self._selected = min(self._selected, len(self._boxes) - 1)
             self._redraw()
+
+    # ----------------------------------------------------------------- drawing
 
     def _redraw(self):
         if not self._pixmap_orig:
@@ -109,34 +257,84 @@ class AnnotationCanvas(QLabel):
         pix = self._pixmap_orig.scaled(
             self.size(), Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation)
-        pw, ph = self._pixmap_orig.width(), self._pixmap_orig.height()
-        sx, sy = pix.width() / pw, pix.height() / ph
         painter = QPainter(pix)
         painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
-        for b in self._boxes:
-            color = self._colors[b["class_id"] % len(self._colors)]
-            painter.setPen(QPen(color, 2))
-            rx, ry = int(b["x1"] * sx), int(b["y1"] * sy)
-            rw = int((b["x2"] - b["x1"]) * sx)
-            rh = int((b["y2"] - b["y1"]) * sy)
+
+        for i, b in enumerate(self._boxes):
+            color = self._colors[b["class"] % len(self._colors)]
+            rx, ry, rw, rh = self._norm_to_disp(b["x"], b["y"], b["w"], b["h"])
+            pw = 3 if i == self._selected else 2
+            painter.setPen(QPen(color, pw))
             painter.drawRect(rx, ry, rw, rh)
-            cls_name = (
-                self._classes[b["class_id"]]
-                if b["class_id"] < len(self._classes)
-                else str(b["class_id"]))
+            cls_name = self._classes[b["class"]] if b["class"] < len(self._classes) else str(b["class"])
             painter.fillRect(rx, ry - 16, len(cls_name) * 8 + 4, 16, color)
             painter.setPen(QPen(Qt.GlobalColor.black))
             painter.drawText(rx + 2, ry - 3, cls_name)
-        if self._drawing:
+            if i == self._selected:
+                for hx, hy in [(rx, ry), (rx + rw, ry), (rx, ry + rh), (rx + rw, ry + rh)]:
+                    painter.fillRect(hx - HANDLE_SIZE // 2, hy - HANDLE_SIZE // 2,
+                                     HANDLE_SIZE, HANDLE_SIZE, color)
+
+        for b in self._suggestions:
+            color = QColor(255, 165, 0)
+            rx, ry, rw, rh = self._norm_to_disp(b["x"], b["y"], b["w"], b["h"])
+            painter.setPen(QPen(color, 2, Qt.PenStyle.DashLine))
+            painter.drawRect(rx, ry, rw, rh)
+            cls_name = self._classes[b["class"]] if b["class"] < len(self._classes) else str(b["class"])
+            painter.setPen(QPen(color, 1))
+            painter.drawText(rx + 2, ry + 14, f"? {cls_name}")
+
+        if self._drag_mode == "draw":
             painter.setPen(QPen(QColor(255, 255, 0), 1, Qt.PenStyle.DashLine))
-            x1 = min(self._start.x(), self._end.x())
-            y1 = min(self._start.y(), self._end.y())
+            x1 = min(self._drag_start.x(), self._drag_cur.x())
+            y1 = min(self._drag_start.y(), self._drag_cur.y())
             painter.drawRect(x1, y1,
-                             abs(self._end.x() - self._start.x()),
-                             abs(self._end.y() - self._start.y()))
+                             abs(self._drag_cur.x() - self._drag_start.x()),
+                             abs(self._drag_cur.y() - self._drag_start.y()))
+
         painter.end()
         self.setPixmap(pix)
 
+
+# ---------------------------------------------------------------------------
+# Background YOLO suggestion thread
+# ---------------------------------------------------------------------------
+
+class YoloSuggestThread(QThread):
+    """Run yolov8n.pt on an image and emit detected boxes in normalised coords."""
+
+    results = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(self, image_path, class_names):
+        super().__init__()
+        self._image_path = image_path
+        self._class_names = [n.lower() for n in class_names]
+
+    def run(self):
+        try:
+            from ultralytics import YOLO
+            model = YOLO("yolov8n.pt")
+            res = model(self._image_path, verbose=False)[0]
+            boxes = []
+            for box in res.boxes:
+                cls_id = int(box.cls[0])
+                yolo_name = model.names.get(cls_id, str(cls_id)).lower()
+                our_cls = 0
+                for i, name in enumerate(self._class_names):
+                    if name == yolo_name:
+                        our_cls = i
+                        break
+                xywhn = box.xywhn[0].tolist()
+                boxes.append({"class": our_cls, "x": xywhn[0], "y": xywhn[1], "w": xywhn[2], "h": xywhn[3]})
+            self.results.emit(boxes)
+        except Exception as ex:
+            self.error.emit(str(ex))
+
+
+# ---------------------------------------------------------------------------
+# Dataset organizer dialog (unchanged)
+# ---------------------------------------------------------------------------
 
 class DatasetOrganizerDialog(QDialog):
     def __init__(self, parent=None):
@@ -212,9 +410,7 @@ class DatasetOrganizerDialog(QDialog):
             return
 
         exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-        images = [
-            f for f in os.listdir(src)
-            if os.path.splitext(f)[1].lower() in exts]
+        images = [f for f in os.listdir(src) if os.path.splitext(f)[1].lower() in exts]
 
         if not images:
             self.info_lbl.setText("❌ В папке нет изображений")
@@ -230,13 +426,9 @@ class DatasetOrganizerDialog(QDialog):
             os.makedirs(os.path.join(dst, "labels", split), exist_ok=True)
 
         for fname in train_files:
-            shutil.copy2(
-                os.path.join(src, fname),
-                os.path.join(dst, "images", "train", fname))
+            shutil.copy2(os.path.join(src, fname), os.path.join(dst, "images", "train", fname))
         for fname in val_files:
-            shutil.copy2(
-                os.path.join(src, fname),
-                os.path.join(dst, "images", "val", fname))
+            shutil.copy2(os.path.join(src, fname), os.path.join(dst, "images", "val", fname))
 
         yaml_path = os.path.join(dst, "data.yaml")
         cfg = {
@@ -249,10 +441,7 @@ class DatasetOrganizerDialog(QDialog):
             yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
 
         self.info_lbl.setText(
-            f"✅ Готово!\n"
-            f"train: {len(train_files)} фото\n"
-            f"val: {len(val_files)} фото\n"
-            f"data.yaml: {yaml_path}")
+            f"✅ Готово!\ntrain: {len(train_files)} фото\nval: {len(val_files)} фото\ndata.yaml: {yaml_path}")
         self._yaml_path = yaml_path
         self._dst = dst
 
@@ -260,12 +449,17 @@ class DatasetOrganizerDialog(QDialog):
         return getattr(self, "_dst", ""), getattr(self, "_yaml_path", "")
 
 
+# ---------------------------------------------------------------------------
+# Main annotation tab
+# ---------------------------------------------------------------------------
+
 class AnnotationTab(QWidget):
     def __init__(self):
         super().__init__()
         self._images = []
         self._current_idx = -1
         self._folder = ""
+        self._suggest_thread = None
         self._build_ui()
 
     def _build_ui(self):
@@ -291,8 +485,7 @@ class AnnotationTab(QWidget):
         g2 = QVBoxLayout(grp_cls)
         self.class_combo = QComboBox()
         self.class_combo.addItems(["object"])
-        self.class_combo.currentIndexChanged.connect(
-            lambda i: self.canvas.set_current_class(i))
+        self.class_combo.currentIndexChanged.connect(lambda i: self.canvas.set_current_class(i))
         g2.addWidget(self.class_combo)
         btn_add_cls = QPushButton("➕ Добавить класс")
         btn_add_cls.clicked.connect(self._add_class)
@@ -332,6 +525,21 @@ class AnnotationTab(QWidget):
         g4.addWidget(btn_save_all)
         left.addWidget(grp_actions)
 
+        grp_suggest = QGroupBox("Авто-выделение")
+        g5 = QVBoxLayout(grp_suggest)
+        self.btn_find = QPushButton("🔍 Найти похожие")
+        self.btn_find.clicked.connect(self._find_similar)
+        g5.addWidget(self.btn_find)
+        self.btn_accept = QPushButton("✅ Принять всё")
+        self.btn_accept.setVisible(False)
+        self.btn_accept.clicked.connect(self._accept_suggestions)
+        g5.addWidget(self.btn_accept)
+        self.btn_reject = QPushButton("❌ Отклонить")
+        self.btn_reject.setVisible(False)
+        self.btn_reject.clicked.connect(self._reject_suggestions)
+        g5.addWidget(self.btn_reject)
+        left.addWidget(grp_suggest)
+
         self.status_lbl = QLabel("Откройте папку")
         self.status_lbl.setWordWrap(True)
         left.addWidget(self.status_lbl)
@@ -340,8 +548,11 @@ class AnnotationTab(QWidget):
         left_w.setLayout(left)
         left_w.setFixedWidth(220)
         main.addWidget(left_w)
+
         self.canvas = AnnotationCanvas()
         main.addWidget(self.canvas)
+
+    # -------------------------------------------------------- dataset / folder
 
     def _organize_dataset(self):
         dlg = DatasetOrganizerDialog(self)
@@ -373,29 +584,39 @@ class AnnotationTab(QWidget):
             self.img_list.setCurrentRow(0)
         self.status_lbl.setText(f"Загружено: {len(self._images)} изображений")
 
+    # ---------------------------------------------------------- image loading
+
     def _load_image(self, idx):
         if 0 <= idx < len(self._images):
             self._current_idx = idx
-            self.canvas.load_image(self._images[idx])
+            path = self._images[idx]
+            self.canvas.load_image(path)
+            self.canvas.load_boxes_from_labels(self._label_path_for(path))
+            self._hide_suggestion_buttons()
 
     def _navigate(self, delta):
         new_idx = self._current_idx + delta
         if 0 <= new_idx < len(self._images):
             self.img_list.setCurrentRow(new_idx)
 
+    # --------------------------------------------------------------- classes
+
     def _add_class(self):
         name, ok = QInputDialog.getText(self, "Класс", "Название:")
         if ok and name.strip():
             self.class_combo.addItem(name.strip())
             self.canvas.set_classes([
-                self.class_combo.itemText(i)
-                for i in range(self.class_combo.count())])
+                self.class_combo.itemText(i) for i in range(self.class_combo.count())])
+
+    def _current_class_names(self):
+        return [self.class_combo.itemText(i) for i in range(self.class_combo.count())]
+
+    # ---------------------------------------------------------- label I/O
 
     def _label_path_for(self, img_path):
         """Return labels/... path mirroring the images/... structure."""
         img_path = os.path.normpath(img_path)
         parts = img_path.replace("\\", "/").split("/")
-        # replace 'images' segment with 'labels'
         if "images" in parts:
             idx = len(parts) - 1 - parts[::-1].index("images")
             parts[idx] = "labels"
@@ -415,9 +636,51 @@ class AnnotationTab(QWidget):
     def _save_all(self):
         self._save_label()
         if self._folder:
-            classes = [
-                self.class_combo.itemText(i)
-                for i in range(self.class_combo.count())]
             with open(os.path.join(self._folder, "classes.txt"), "w") as f:
-                f.write("\n".join(classes))
+                f.write("\n".join(self._current_class_names()))
         self.status_lbl.setText("Все метки сохранены")
+
+    # --------------------------------------------------------- YOLO suggest
+
+    def _find_similar(self):
+        if self._current_idx < 0:
+            self.status_lbl.setText("Откройте изображение")
+            return
+        if self._suggest_thread and self._suggest_thread.isRunning():
+            return
+        self.btn_find.setEnabled(False)
+        self.status_lbl.setText("Запуск yolov8n.pt…")
+        self.canvas.clear_suggestions()
+        self._suggest_thread = YoloSuggestThread(
+            self._images[self._current_idx], self._current_class_names())
+        self._suggest_thread.results.connect(self._on_suggestions)
+        self._suggest_thread.error.connect(self._on_suggest_error)
+        self._suggest_thread.start()
+
+    def _on_suggestions(self, boxes):
+        self.btn_find.setEnabled(True)
+        if not boxes:
+            self.status_lbl.setText("Объекты не найдены")
+            return
+        self.canvas.set_suggestions(boxes)
+        self.btn_accept.setVisible(True)
+        self.btn_reject.setVisible(True)
+        self.status_lbl.setText(f"Найдено: {len(boxes)} объектов (пунктир). Принять?")
+
+    def _on_suggest_error(self, msg):
+        self.btn_find.setEnabled(True)
+        self.status_lbl.setText(f"Ошибка YOLO: {msg}")
+
+    def _accept_suggestions(self):
+        self.canvas.accept_suggestions()
+        self._hide_suggestion_buttons()
+        self.status_lbl.setText("Предложения приняты")
+
+    def _reject_suggestions(self):
+        self.canvas.clear_suggestions()
+        self._hide_suggestion_buttons()
+        self.status_lbl.setText("Предложения отклонены")
+
+    def _hide_suggestion_buttons(self):
+        self.btn_accept.setVisible(False)
+        self.btn_reject.setVisible(False)
