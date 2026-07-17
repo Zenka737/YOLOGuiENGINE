@@ -34,6 +34,7 @@ class AnnotationCanvas(QLabel):
         self._drag_start = QPoint()
         self._drag_cur = QPoint()
         self._drag_box_orig = None
+        self._template_box = None
         self._colors = [
             QColor(255, 80, 80), QColor(80, 255, 80), QColor(80, 180, 255),
             QColor(255, 200, 0), QColor(200, 80, 255), QColor(0, 255, 200)]
@@ -83,6 +84,10 @@ class AnnotationCanvas(QLabel):
 
     def clear_suggestions(self):
         self._suggestions = []
+        self._redraw()
+
+    def set_template_highlight(self, box):
+        self._template_box = dict(box) if box else None
         self._redraw()
 
     def undo_last(self):
@@ -309,6 +314,14 @@ class AnnotationCanvas(QLabel):
                 for hx, hy in [(rx, ry), (rx + rw, ry), (rx, ry + rh), (rx + rw, ry + rh)]:
                     painter.fillRect(hx - HANDLE_SIZE // 2, hy - HANDLE_SIZE // 2,
                                      HANDLE_SIZE, HANDLE_SIZE, color)
+
+        if self._template_box:
+            b = self._template_box
+            rx, ry, rw, rh = self._norm_to_disp(b["x"], b["y"], b["w"], b["h"])
+            painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.PenStyle.DashLine))
+            painter.drawRect(rx, ry, rw, rh)
+            painter.setPen(QPen(QColor(255, 255, 0), 1))
+            painter.drawText(rx + 2, ry + 14, "шаблон")
 
         for b in self._suggestions:
             color = QColor(255, 165, 0)
@@ -665,6 +678,7 @@ class AnnotationTab(QWidget):
             self.canvas.load_image(path)
             self.canvas.load_boxes_from_labels(self._label_path_for(path))
             self.canvas.clear_suggestions()
+            self.canvas.set_template_highlight(self._template_box)
 
     def _navigate(self, delta):
         new_idx = self._current_idx + delta
@@ -720,6 +734,7 @@ class AnnotationTab(QWidget):
             self.status_lbl.setText("⚠ Сначала выделите бокс на холсте")
             return
         self._template_box = dict(sel)
+        self.canvas.set_template_highlight(self._template_box)
         cls_name = self._current_class_names()[sel["class"]] if sel["class"] < self.class_combo.count() else "?"
         self.tmpl_lbl.setText(f"Шаблон: {cls_name} ✓")
         self.tmpl_lbl.setStyleSheet("color: #80ff80; font-size: 10px;")
