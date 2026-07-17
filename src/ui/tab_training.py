@@ -8,14 +8,17 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 
 def _detect_devices():
-    """Return list of available device strings for YOLO training."""
-    devices = ["cpu"]
+    """Return list of (device_id, label) tuples for YOLO training."""
+    devices = [("cpu", "CPU")]
     try:
         import torch
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 name = torch.cuda.get_device_name(i)
-                devices.append(f"{i}  —  {name}")
+                devices.append((str(i), f"GPU {i}  —  {name}"))
+        # MPS (Apple Silicon)
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            devices.append(("mps", "GPU  —  Apple MPS"))
     except Exception:
         pass
     return devices
@@ -164,16 +167,10 @@ class TrainingTab(QWidget):
 
     def _refresh_devices(self):
         self.device_combo.clear()
-        devices = _detect_devices()
         self._devices_raw = []
-        for d in devices:
-            if d == "cpu":
-                self.device_combo.addItem("CPU")
-                self._devices_raw.append("cpu")
-            else:
-                idx, name = d.split("  —  ", 1)
-                self.device_combo.addItem(f"GPU {idx.strip()}  —  {name}")
-                self._devices_raw.append(idx.strip())
+        for device_id, label in _detect_devices():
+            self.device_combo.addItem(label)
+            self._devices_raw.append(device_id)
 
     def _selected_device(self):
         i = self.device_combo.currentIndex()

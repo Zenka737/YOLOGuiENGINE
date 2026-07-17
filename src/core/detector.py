@@ -1,6 +1,26 @@
+import os
 import cv2
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QImage
+
+
+def _list_cameras(max_test=4):
+    """Return list of working camera indices, suppressing OpenCV stderr."""
+    found = []
+    devnull = open(os.devnull, "w")
+    old_stderr = os.dup(2)
+    os.dup2(devnull.fileno(), 2)
+    try:
+        for i in range(max_test):
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            if cap.isOpened():
+                found.append(i)
+                cap.release()
+    finally:
+        os.dup2(old_stderr, 2)
+        os.close(old_stderr)
+        devnull.close()
+    return found
 
 
 class DetectorThread(QThread):
