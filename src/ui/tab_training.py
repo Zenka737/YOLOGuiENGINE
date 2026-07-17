@@ -2,26 +2,45 @@ import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QSpinBox, QDoubleSpinBox, QComboBox, QGroupBox, QFileDialog,
-    QTextEdit, QProgressBar
+    QTextEdit, QProgressBar, QButtonGroup, QRadioButton
 )
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 
-def _detect_devices():
-    """Return list of (device_id, label) tuples for YOLO training."""
-    devices = [("cpu", "CPU")]
+def _scan_cpu():
+    """Always available. Returns list of one (device_id, label)."""
+    import platform
+    name = platform.processor() or "CPU"
+    return [("cpu", name)]
+
+
+def _scan_gpu():
+    """Returns list of (device_id, label) for all CUDA/MPS GPUs."""
+    found = []
     try:
         import torch
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
-                name = torch.cuda.get_device_name(i)
-                devices.append((str(i), f"GPU {i}  —  {name}"))
-        # MPS (Apple Silicon)
+                found.append((str(i), torch.cuda.get_device_name(i)))
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            devices.append(("mps", "GPU  —  Apple MPS"))
+            found.append(("mps", "Apple MPS"))
     except Exception:
         pass
-    return devices
+    return found
+
+
+def _scan_npu():
+    """Returns list of (device_id, label) for Intel NPU / OpenVINO."""
+    found = []
+    try:
+        import openvino.runtime as ov
+        core = ov.Core()
+        for dev in core.available_devices:
+            if "NPU" in dev or "GNA" in dev:
+                found.append((dev, dev))
+    except Exception:
+        pass
+    return found
 
 
 class TrainThread(QThread):
@@ -117,16 +136,34 @@ class TrainingTab(QWidget):
         g3.addLayout(row("LR:", self.lr_spin))
         left.addWidget(grp_params)
 
+        # --- Device selector ---
         grp_device = QGroupBox("Устройство")
-        g5 = QVBoxLayout(grp_device)
+        gd = QVBoxLayout(grp_device)
+
+        btn_row = QHBoxLayout()
+        self._dev_btn_group = QButtonGroup(self)
+        for i, (label, dtype) in enumerate([("CPU", "cpu"), ("GPU", "gpu"), ("NPU", "npu")]):
+            rb = QRadioButton(label)
+            rb.setProperty("devtype", dtype)
+            self._dev_btn_group.addButton(rb, i)
+            btn_row.addWidget(rb)
+        self._dev_btn_group.button(0).setChecked(True)
+        gd.addLayout(btn_row)
+
         self.device_combo = QComboBox()
-        self._devices_raw = []
-        self._refresh_devices()
-        btn_refresh = QPushButton("🔄 Обновить")
-        btn_refresh.clicked.connect(self._refresh_devices)
-        g5.addWidget(self.device_combo)
-        g5.addWidget(btn_refresh)
+        self.device_combo.setVisible(False)
+        gd.addWidget(self.device_combo)
+
+        self.device_status_lbl = QLabel("")
+        self.device_status_lbl.setWordWrap(True)
+        self.device_status_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        gd.addWidget(self.device_status_lbl)
+
+        self._dev_btn_group.idClicked.connect(self._on_device_type_changed)
         left.addWidget(grp_device)
+
+        # Trigger initial scan for CPU
+        self._on_device_type_changed(0)
 
         grp_out = QGroupBox("Папка")
         g4 = QVBoxLayout(grp_out)
@@ -165,17 +202,37 @@ class TrainingTab(QWidget):
         right_w.setLayout(right)
         main.addWidget(right_w)
 
-    def _refresh_devices(self):
+    def _on_device_type_changed(self, btn_id):
+        dtype = self._dev_btn_group.button(btn_id).property("devtype")
         self.device_combo.clear()
         self._devices_raw = []
-        for device_id, label in _detect_devices():
-            self.device_combo.addItem(label)
-            self._devices_raw.append(device_id)
+
+        if dtype == "cpu":
+            results = _scan_cpu()
+        elif dtype == "gpu":
+            results = _scan_gpu()
+        else:
+            results = _scan_npu()
+
+        if results:
+            for dev_id, label in results:
+                self.device_combo.addItem(label)
+                self._devices_raw.append(dev_id)
+            self.device_combo.setVisible(len(results) > 1)
+            self.device_status_lbl.setText("")
+            self.device_status_lbl.setStyleSheet("")
+        else:
+            self.device_combo.setVisible(False)
+            name = dtype.upper()
+            self.device_status_lbl.setText(f"❌ {name} не найден")
+            self.device_status_lbl.setStyleSheet("color: #ff4444; font-weight: bold;")
 
     def _selected_device(self):
         i = self.device_combo.currentIndex()
-        if i < 0 or i >= len(self._devices_raw):
+        if not self._devices_raw:
             return "cpu"
+        if i < 0 or i >= len(self._devices_raw):
+            return self._devices_raw[0]
         return self._devices_raw[i]
 
     def _browse_data(self):
@@ -217,6 +274,9 @@ class TrainingTab(QWidget):
         err = self._validate_yaml(data)
         if err:
             self.log_view.append(f"❌ {err}")
+            return
+        if not self._devices_raw:
+            self.log_view.append("❌ Выбранное устройство недоступно")
             return
         device = self._selected_device()
         params = {

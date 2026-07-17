@@ -174,37 +174,58 @@ def test_label_path_for_images_val(tmp_path):
 # _detect_devices always includes cpu
 # ---------------------------------------------------------------------------
 
-def test_detect_devices_has_cpu(monkeypatch):
-    """_detect_devices always includes cpu even when torch is absent."""
+def test_scan_cpu_always_returns_entry():
+    """_scan_cpu always returns at least one entry with device_id='cpu'."""
+    import importlib.util
     import types
 
-    # Stub torch to simulate no GPU
-    torch_stub = types.ModuleType("torch")
-    torch_stub.cuda = types.SimpleNamespace(
-        is_available=lambda: False, device_count=lambda: 0)
-    torch_stub.backends = types.SimpleNamespace(
-        mps=types.SimpleNamespace(is_available=lambda: False))
-    monkeypatch.setitem(sys.modules, "torch", torch_stub)
+    # Stub PyQt6 and QThread so the module loads without a display
+    for name in ("PyQt6", "PyQt6.QtWidgets", "PyQt6.QtCore", "PyQt6.QtGui"):
+        if name not in sys.modules:
+            sys.modules[name] = types.ModuleType(name)
+    sys.modules["PyQt6.QtCore"].QThread = object
+    sys.modules["PyQt6.QtCore"].pyqtSignal = lambda *a, **kw: None
+    sys.modules["PyQt6.QtCore"].Qt = types.SimpleNamespace(AlignmentFlag=types.SimpleNamespace(AlignLeft=0))
+    for attr in ("QWidget", "QVBoxLayout", "QHBoxLayout", "QPushButton", "QLabel",
+                 "QSpinBox", "QDoubleSpinBox", "QComboBox", "QGroupBox", "QFileDialog",
+                 "QTextEdit", "QProgressBar", "QButtonGroup", "QRadioButton"):
+        setattr(sys.modules["PyQt6.QtWidgets"], attr, object)
 
-    # Extract only _detect_devices by exec-ing the function in isolation
-    src = open(
-        os.path.join(os.path.dirname(__file__), "..", "src", "ui", "tab_training.py"),
-        encoding="utf-8",
-    ).read()
+    spec = importlib.util.spec_from_file_location(
+        "tab_training_v2",
+        os.path.join(os.path.dirname(__file__), "..", "src", "ui", "tab_training.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
 
-    # Pull out just the function body
-    ns = {"sys": sys}
-    # Execute only up to the class definition to get the top-level function
-    lines = src.splitlines()
-    func_lines = []
-    in_func = False
-    for line in lines:
-        if line.startswith("def _detect_devices"):
-            in_func = True
-        if in_func:
-            if line.startswith("class ") and func_lines:
-                break
-            func_lines.append(line)
-    exec("\n".join(func_lines), ns)  # noqa: S102
-    devices = ns["_detect_devices"]()
-    assert any(d[0] == "cpu" for d in devices)
+    result = mod._scan_cpu()
+    assert isinstance(result, list)
+    assert len(result) >= 1
+    assert result[0][0] == "cpu"
+
+
+def test_scan_gpu_no_torch(monkeypatch):
+    """_scan_gpu returns empty list when torch is unavailable."""
+    import types
+    monkeypatch.setitem(sys.modules, "torch", None)
+
+    import importlib.util
+    for name in ("PyQt6", "PyQt6.QtWidgets", "PyQt6.QtCore", "PyQt6.QtGui"):
+        if name not in sys.modules:
+            sys.modules[name] = types.ModuleType(name)
+    sys.modules["PyQt6.QtCore"].QThread = object
+    sys.modules["PyQt6.QtCore"].pyqtSignal = lambda *a, **kw: None
+    sys.modules["PyQt6.QtCore"].Qt = types.SimpleNamespace(AlignmentFlag=types.SimpleNamespace(AlignLeft=0))
+    for attr in ("QWidget", "QVBoxLayout", "QHBoxLayout", "QPushButton", "QLabel",
+                 "QSpinBox", "QDoubleSpinBox", "QComboBox", "QGroupBox", "QFileDialog",
+                 "QTextEdit", "QProgressBar", "QButtonGroup", "QRadioButton"):
+        setattr(sys.modules["PyQt6.QtWidgets"], attr, object)
+
+    spec = importlib.util.spec_from_file_location(
+        "tab_training_v3",
+        os.path.join(os.path.dirname(__file__), "..", "src", "ui", "tab_training.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    result = mod._scan_gpu()
+    assert isinstance(result, list)
+    assert result == []
