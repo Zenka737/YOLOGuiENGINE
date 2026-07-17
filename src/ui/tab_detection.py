@@ -7,7 +7,12 @@ from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QPixmap, QImage
 from core.detector import DetectorThread
 
-BUILTIN_MODELS = ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt", "yolov8x.pt"]
+BUILTIN_MODELS = [
+    "yolov8n.pt",
+    "yolov8s.pt",
+    "yolov8m.pt",
+    "yolov8l.pt",
+    "yolov8x.pt"]
 
 
 class DetectionTab(QWidget):
@@ -38,7 +43,8 @@ class DetectionTab(QWidget):
         grp_src = QGroupBox("Источник")
         g2 = QVBoxLayout(grp_src)
         self.src_combo = QComboBox()
-        self.src_combo.addItems(["Камера 0", "Камера 1", "Видеофайл", "Изображение"])
+        self.src_combo.addItems(
+            ["Камера 0", "Камера 1", "Видеофайл", "Изображение"])
         self.src_combo.currentIndexChanged.connect(self._on_source_change)
         g2.addWidget(self.src_combo)
         self.btn_browse_src = QPushButton("📂 Выбрать файл")
@@ -57,7 +63,8 @@ class DetectionTab(QWidget):
         self.conf_slider.setRange(1, 99)
         self.conf_slider.setValue(25)
         self.conf_lbl = QLabel("0.25")
-        self.conf_slider.valueChanged.connect(lambda v: self.conf_lbl.setText(f"{v/100:.2f}"))
+        self.conf_slider.valueChanged.connect(
+            lambda v: self.conf_lbl.setText(f"{v/100:.2f}"))
         row = QHBoxLayout()
         row.addWidget(self.conf_slider)
         row.addWidget(self.conf_lbl)
@@ -67,7 +74,8 @@ class DetectionTab(QWidget):
         self.iou_slider.setRange(1, 99)
         self.iou_slider.setValue(45)
         self.iou_lbl = QLabel("0.45")
-        self.iou_slider.valueChanged.connect(lambda v: self.iou_lbl.setText(f"{v/100:.2f}"))
+        self.iou_slider.valueChanged.connect(
+            lambda v: self.iou_lbl.setText(f"{v/100:.2f}"))
         row2 = QHBoxLayout()
         row2.addWidget(self.iou_slider)
         row2.addWidget(self.iou_lbl)
@@ -103,35 +111,45 @@ class DetectionTab(QWidget):
 
         self.video_label = QLabel("Нажмите Старт для запуска детекции")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setStyleSheet("border: 2px solid #2d4a7a; border-radius: 8px; background: #0d1b2e;")
-        self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.video_label.setStyleSheet(
+            "border: 2px solid #2d4a7a; border-radius: 8px; background: #0d1b2e;")
+        self.video_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding)
         main.addWidget(self.video_label)
 
     def _browse_model(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Выбрать модель", "", "YOLO Models (*.pt *.onnx)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Выбрать модель", "", "YOLO Models (*.pt *.onnx)")
         if path:
             self.model_combo.addItem(path)
             self.model_combo.setCurrentText(path)
 
     def _on_source_change(self, idx):
         self.btn_browse_src.setVisible(idx >= 2)
-        if idx == 0: self.lbl_src.setText("Источник: Камера 0")
-        elif idx == 1: self.lbl_src.setText("Источник: Камера 1")
+        if idx == 0:
+            self.lbl_src.setText("Источник: Камера 0")
+        elif idx == 1:
+            self.lbl_src.setText("Источник: Камера 1")
 
     def _browse_source(self):
         idx = self.src_combo.currentIndex()
         if idx == 2:
-            path, _ = QFileDialog.getOpenFileName(self, "Видео", "", "Video (*.mp4 *.avi *.mov *.mkv)")
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Видео", "", "Video (*.mp4 *.avi *.mov *.mkv)")
         else:
-            path, _ = QFileDialog.getOpenFileName(self, "Изображение", "", "Images (*.jpg *.jpeg *.png *.bmp)")
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Изображение", "", "Images (*.jpg *.jpeg *.png *.bmp)")
         if path:
             self.lbl_src.setText(f"Файл: {os.path.basename(path)}")
             self._src_path = path
 
     def _get_source(self):
         idx = self.src_combo.currentIndex()
-        if idx == 0: return 0
-        if idx == 1: return 1
+        if idx == 0:
+            return 0
+        if idx == 1:
+            return 1
         return getattr(self, "_src_path", 0)
 
     def _start(self):
@@ -149,7 +167,8 @@ class DetectionTab(QWidget):
 
     def _pause(self):
         self.thread.pause()
-        self.btn_pause.setText("▶  Продолжить" if self.thread.paused else "⏸  Пауза")
+        self.btn_pause.setText(
+            "▶  Продолжить" if self.thread.paused else "⏸  Пауза")
 
     def _stop(self):
         self.thread.stop()
@@ -163,8 +182,11 @@ class DetectionTab(QWidget):
     @pyqtSlot(QImage)
     def _on_frame(self, qimg):
         pix = QPixmap.fromImage(qimg)
-        self.video_label.setPixmap(pix.scaled(self.video_label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.video_label.setPixmap(
+            pix.scaled(
+                self.video_label.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
 
     @pyqtSlot(str)
     def _on_status(self, msg):
