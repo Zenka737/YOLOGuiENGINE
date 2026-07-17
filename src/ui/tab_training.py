@@ -189,11 +189,22 @@ class TrainingTab(QWidget):
         btn_save_cfg = QPushButton("💾 Сохранить конфигурацию")
         btn_save_cfg.clicked.connect(self._save_config)
         gd.addWidget(btn_save_cfg)
-
-        self._dev_btn_group.idClicked.connect(self._on_device_type_changed)
         left.addWidget(grp_device)
 
+        grp_yaml_fix = QGroupBox("Исправить data.yaml")
+        gy = QVBoxLayout(grp_yaml_fix)
+        lbl_fix = QLabel("Если пути в yaml относительные — сделать абсолютными:")
+        lbl_fix.setWordWrap(True)
+        gy.addWidget(lbl_fix)
+        btn_fix_yaml = QPushButton("🔧 Исправить пути в yaml")
+        btn_fix_yaml.clicked.connect(self._fix_yaml_paths)
+        gy.addWidget(btn_fix_yaml)
+
+        self._dev_btn_group.idClicked.connect(self._on_device_type_changed)
+
         self._on_device_type_changed(0)
+
+        left.addWidget(grp_yaml_fix)
 
         grp_out = QGroupBox("Папка")
         g4 = QVBoxLayout(grp_out)
@@ -315,6 +326,38 @@ class TrainingTab(QWidget):
         if cfg.get("project"):
             self._out_path = cfg["project"]
             self.out_lbl.setText(cfg["project"])
+
+    def _fix_yaml_paths(self):
+        import yaml
+        data = getattr(self, "_data_path", None)
+        if not data:
+            self.log_view.append("⚠ Сначала выберите data.yaml")
+            return
+        try:
+            with open(data, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+        except Exception as e:
+            self.log_view.append(f"❌ Не удалось прочитать yaml: {e}")
+            return
+
+        yaml_dir = os.path.dirname(os.path.abspath(data))
+        changed = []
+        for key in ("train", "val", "test"):
+            val = cfg.get(key)
+            if not val:
+                continue
+            if not os.path.isabs(val):
+                abs_path = os.path.normpath(os.path.join(yaml_dir, val))
+                cfg[key] = abs_path.replace("\\", "/")
+                changed.append(f"  {key}: {val}  →  {cfg[key]}")
+
+        if not changed:
+            self.log_view.append("✅ Пути уже абсолютные, ничего не изменено")
+            return
+
+        with open(data, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+        self.log_view.append("✅ Пути исправлены:\n" + "\n".join(changed))
 
     def _browse_data(self):
         path, _ = QFileDialog.getOpenFileName(
