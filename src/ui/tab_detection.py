@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QPixmap, QImage
-from core.detector import DetectorThread
+from core.detector import DetectorThread, _list_cameras
 
 BUILTIN_MODELS = [
     "yolov8n.pt",
@@ -43,15 +43,18 @@ class DetectionTab(QWidget):
         grp_src = QGroupBox("Источник")
         g2 = QVBoxLayout(grp_src)
         self.src_combo = QComboBox()
-        self.src_combo.addItems(
-            ["Камера 0", "Камера 1", "Видеофайл", "Изображение"])
+        self._camera_indices = []
+        self._rebuild_camera_list()
         self.src_combo.currentIndexChanged.connect(self._on_source_change)
         g2.addWidget(self.src_combo)
+        btn_refresh_cam = QPushButton("🔄 Найти камеры")
+        btn_refresh_cam.clicked.connect(self._rebuild_camera_list)
+        g2.addWidget(btn_refresh_cam)
         self.btn_browse_src = QPushButton("📂 Выбрать файл")
         self.btn_browse_src.clicked.connect(self._browse_source)
         self.btn_browse_src.setVisible(False)
         g2.addWidget(self.btn_browse_src)
-        self.lbl_src = QLabel("Источник: Камера 0")
+        self.lbl_src = QLabel("")
         self.lbl_src.setWordWrap(True)
         g2.addWidget(self.lbl_src)
         left.addWidget(grp_src)
@@ -118,6 +121,26 @@ class DetectionTab(QWidget):
             QSizePolicy.Policy.Expanding)
         main.addWidget(self.video_label)
 
+    def _rebuild_camera_list(self):
+        self.src_combo.blockSignals(True)
+        self.src_combo.clear()
+        self._camera_indices = []
+        cameras = _list_cameras()
+        if cameras:
+            for i in cameras:
+                self.src_combo.addItem(f"Камера {i}")
+                self._camera_indices.append(i)
+        else:
+            self.src_combo.addItem("Камеры не найдены")
+            self._camera_indices.append(None)
+        self.src_combo.addItem("Видеофайл")
+        self._camera_indices.append("video")
+        self.src_combo.addItem("Изображение")
+        self._camera_indices.append("image")
+        self.src_combo.blockSignals(False)
+        self.src_combo.setCurrentIndex(0)
+        self._on_source_change(0)
+
     def _browse_model(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Выбрать модель", "", "YOLO Models (*.pt *.onnx)")
@@ -126,15 +149,19 @@ class DetectionTab(QWidget):
             self.model_combo.setCurrentText(path)
 
     def _on_source_change(self, idx):
-        self.btn_browse_src.setVisible(idx >= 2)
-        if idx == 0:
-            self.lbl_src.setText("Источник: Камера 0")
-        elif idx == 1:
-            self.lbl_src.setText("Источник: Камера 1")
+        if idx < 0 or idx >= len(self._camera_indices):
+            return
+        val = self._camera_indices[idx]
+        is_file = val in ("video", "image")
+        self.btn_browse_src.setVisible(is_file)
+        if not is_file:
+            self.lbl_src.setText(
+                "" if val is None else f"Источник: Камера {val}")
 
     def _browse_source(self):
         idx = self.src_combo.currentIndex()
-        if idx == 2:
+        val = self._camera_indices[idx] if idx < len(self._camera_indices) else None
+        if val == "video":
             path, _ = QFileDialog.getOpenFileName(
                 self, "Видео", "", "Video (*.mp4 *.avi *.mov *.mkv)")
         else:
@@ -146,11 +173,12 @@ class DetectionTab(QWidget):
 
     def _get_source(self):
         idx = self.src_combo.currentIndex()
-        if idx == 0:
+        if idx < 0 or idx >= len(self._camera_indices):
             return 0
-        if idx == 1:
-            return 1
-        return getattr(self, "_src_path", 0)
+        val = self._camera_indices[idx]
+        if val in ("video", "image"):
+            return getattr(self, "_src_path", 0)
+        return val if val is not None else 0
 
     def _start(self):
         if self.thread.isRunning():
