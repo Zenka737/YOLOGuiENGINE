@@ -36,6 +36,7 @@ class DetectorThread(QThread):
         self.paused = False
         self.conf = 0.25
         self.iou = 0.45
+        self.device = "cpu"
 
     def load_model(self, model_path: str):
         try:
@@ -71,7 +72,8 @@ class DetectorThread(QThread):
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     continue
                 break
-            results = self.model(frame, conf=self.conf, iou=self.iou, verbose=False)
+            results = self.model(frame, conf=self.conf, iou=self.iou,
+                                 device=self.device, verbose=False)
             annotated = results[0].plot()
             rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
