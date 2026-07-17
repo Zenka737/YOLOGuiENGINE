@@ -1,11 +1,12 @@
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QComboBox, QSlider, QGroupBox, QFileDialog, QSizePolicy
+    QComboBox, QSlider, QGroupBox, QFileDialog, QSizePolicy, QButtonGroup, QRadioButton
 )
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QPixmap, QImage
 from core.detector import DetectorThread, _list_cameras
+from ui.tab_training import _scan_cpu, _scan_gpu, _scan_gpu_info, _scan_npu
 
 BUILTIN_MODELS = [
     "yolov8n.pt",
@@ -18,6 +19,7 @@ BUILTIN_MODELS = [
 class DetectionTab(QWidget):
     def __init__(self):
         super().__init__()
+        self._det_devices_raw = []
         self.thread = DetectorThread()
         self.thread.frame_ready.connect(self._on_frame)
         self.thread.status_update.connect(self._on_status)
@@ -85,6 +87,27 @@ class DetectionTab(QWidget):
         g3.addLayout(row2)
         left.addWidget(grp_params)
 
+        grp_device = QGroupBox("Устройство")
+        gd = QVBoxLayout(grp_device)
+        btn_row = QHBoxLayout()
+        self._dev_btn_group = QButtonGroup(self)
+        for i, (label, dtype) in enumerate([("CPU", "cpu"), ("GPU", "gpu"), ("NPU", "npu")]):
+            rb = QRadioButton(label)
+            rb.setProperty("devtype", dtype)
+            self._dev_btn_group.addButton(rb, i)
+            btn_row.addWidget(rb)
+        self._dev_btn_group.button(0).setChecked(True)
+        gd.addLayout(btn_row)
+        self.det_device_combo = QComboBox()
+        self.det_device_combo.setVisible(False)
+        gd.addWidget(self.det_device_combo)
+        self.det_device_status = QLabel("")
+        self.det_device_status.setWordWrap(True)
+        gd.addWidget(self.det_device_status)
+        self._dev_btn_group.idClicked.connect(self._on_device_type_changed)
+        self._on_device_type_changed(0)
+        left.addWidget(grp_device)
+
         grp_ctrl = QGroupBox("Управление")
         g4 = QVBoxLayout(grp_ctrl)
         self.btn_start = QPushButton("▶  Старт")
@@ -120,6 +143,47 @@ class DetectionTab(QWidget):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding)
         main.addWidget(self.video_label)
+
+    def _on_device_type_changed(self, btn_id):
+        dtype = self._dev_btn_group.button(btn_id).property("devtype")
+        self.det_device_combo.clear()
+        self._det_devices_raw = []
+
+        if dtype == "cpu":
+            results = _scan_cpu()
+        elif dtype == "gpu":
+            results = _scan_gpu()
+        else:
+            results = _scan_npu()
+
+        if results:
+            for dev_id, label in results:
+                self.det_device_combo.addItem(label)
+                self._det_devices_raw.append(dev_id)
+            self.det_device_combo.setVisible(len(results) > 1)
+            self.det_device_status.setText("")
+            self.det_device_status.setStyleSheet("")
+        else:
+            self.det_device_combo.setVisible(False)
+            if dtype == "gpu":
+                gpu_names = _scan_gpu_info()
+                if gpu_names:
+                    msg = (f"❌ CUDA недоступна.\nНайдены GPU: {', '.join(gpu_names)}\n"
+                           "Установите CUDA-драйверы или используйте CPU.")
+                else:
+                    msg = "❌ GPU не найден"
+            else:
+                msg = f"❌ {dtype.upper()} не найден"
+            self.det_device_status.setText(msg)
+            self.det_device_status.setStyleSheet("color: #ff4444; font-weight: bold;")
+
+    def _selected_device(self):
+        i = self.det_device_combo.currentIndex()
+        if not self._det_devices_raw:
+            return "cpu"
+        if i < 0 or i >= len(self._det_devices_raw):
+            return self._det_devices_raw[0]
+        return self._det_devices_raw[i]
 
     def _rebuild_camera_list(self):
         self.src_combo.blockSignals(True)
@@ -188,6 +252,7 @@ class DetectionTab(QWidget):
         self.thread.set_source(self._get_source())
         self.thread.conf = self.conf_slider.value() / 100
         self.thread.iou = self.iou_slider.value() / 100
+        self.thread.device = self._selected_device()
         self.thread.start()
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
