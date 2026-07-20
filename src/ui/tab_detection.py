@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QPixmap, QImage
 from core.detector import DetectorThread, _list_cameras
-from ui.tab_training import _scan_cpu, _scan_gpu, _scan_gpu_info, _scan_npu
+from ui.tab_training import _scan_cpu, _scan_gpu, _scan_gpu_info, _scan_npu, is_rtx_gpu
 
 BUILTIN_MODELS = [
     "yolov8n.pt",
@@ -168,8 +168,14 @@ class DetectionTab(QWidget):
             if dtype == "gpu":
                 gpu_names = _scan_gpu_info()
                 if gpu_names:
-                    msg = (f"❌ CUDA недоступна.\nНайдены GPU: {', '.join(gpu_names)}\n"
-                           "Установите CUDA-драйверы или используйте CPU.")
+                    names_str = ", ".join(gpu_names)
+                    if any(is_rtx_gpu(n) for n in gpu_names):
+                        hint = ("Установлена CPU-версия PyTorch. Поставьте CUDA-версию:\n"
+                                "pip install torch torchvision "
+                                "--index-url https://download.pytorch.org/whl/cu121")
+                    else:
+                        hint = "Установите CUDA-драйверы или используйте CPU."
+                    msg = f"❌ CUDA недоступна.\nНайдены GPU: {names_str}\n{hint}"
                 else:
                     msg = "❌ GPU не найден"
             else:
