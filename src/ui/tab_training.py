@@ -110,13 +110,21 @@ def _scan_gpu_info():
         import subprocess
         import platform
         if platform.system() == "Windows":
-            out = subprocess.check_output(
-                ["wmic", "path", "win32_VideoController", "get", "name"],
-                text=True, timeout=5, creationflags=0x08000000)
-            for line in out.splitlines():
-                name = line.strip()
-                if name and name.lower() != "name":
-                    names.append(name)
+            # wmic is removed on newer Windows builds; PowerShell works everywhere.
+            try:
+                out = subprocess.check_output(
+                    ["powershell", "-NoProfile", "-Command",
+                     "(Get-CimInstance Win32_VideoController).Name"],
+                    text=True, timeout=8, creationflags=0x08000000)
+                names = [line.strip() for line in out.splitlines() if line.strip()]
+            except Exception:
+                out = subprocess.check_output(
+                    ["wmic", "path", "win32_VideoController", "get", "name"],
+                    text=True, timeout=5, creationflags=0x08000000)
+                for line in out.splitlines():
+                    name = line.strip()
+                    if name and name.lower() != "name":
+                        names.append(name)
         else:
             out = subprocess.check_output(
                 ["lspci"], text=True, timeout=5, stderr=subprocess.DEVNULL)
