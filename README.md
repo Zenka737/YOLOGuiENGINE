@@ -19,6 +19,28 @@ cd YOLOGuiENGINE
 pip install -r requirements.txt
 ```
 
+### GPU (NVIDIA CUDA)
+
+`pip install -r requirements.txt` по умолчанию ставит **CPU-версию** PyTorch,
+из-за этого программа пишет «GPU не найден», даже если видеокарта есть
+(например, RTX 4060). Чтобы включить поддержку CUDA, поставьте GPU-версию
+PyTorch **до** установки `requirements.txt`:
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+```
+
+Проверьте, что CUDA определилась:
+
+```bash
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+Также потребуются актуальные драйверы NVIDIA. На видеокартах серии RTX
+(тензорные ядра) детекция и обучение автоматически используют TF32/FP16
+для ускорения, если выбрано CUDA-устройство.
+
 ## Запуск
 
 ```bash
