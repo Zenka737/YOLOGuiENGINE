@@ -85,17 +85,30 @@ def _scan_cpu():
     return [("cpu", name)]
 
 
+def is_rtx_gpu(name: str) -> bool:
+    """RTX cards (20xx+) have tensor cores worth enabling TF32/FP16 for."""
+    return isinstance(name, str) and "rtx" in name.lower()
+
+
+def _nvidia_smi_names():
+    """Query nvidia-smi directly - works regardless of torch/CUDA install state,
+    as long as the NVIDIA driver is installed. Most reliable source of truth."""
+    import subprocess
+    out = subprocess.check_output(
+        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+        text=True, timeout=5, stderr=subprocess.DEVNULL)
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
 def _scan_gpu():
     """Return list of (device_id, label) for usable GPU devices only."""
     found = []
-    cuda_names = set()
     try:
         import torch
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 name = torch.cuda.get_device_name(i)
                 found.append((str(i), f"{name} (CUDA:{i})"))
-                cuda_names.add(name.lower())
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             found.append(("mps", "Apple MPS"))
     except Exception:
@@ -104,19 +117,38 @@ def _scan_gpu():
 
 
 def _scan_gpu_info():
-    """Return names of all detected GPUs (including non-CUDA) for info display."""
+    """Return names of all detected GPUs (including non-CUDA) for info display.
+
+    Tries nvidia-smi first since it only depends on the NVIDIA driver (not on
+    torch being installed correctly), then falls back to OS-level tools.
+    """
+    try:
+        names = _nvidia_smi_names()
+        if names:
+            return names
+    except Exception:
+        pass
+
     names = []
     try:
         import subprocess
         import platform
         if platform.system() == "Windows":
-            out = subprocess.check_output(
-                ["wmic", "path", "win32_VideoController", "get", "name"],
-                text=True, timeout=5, creationflags=0x08000000)
-            for line in out.splitlines():
-                name = line.strip()
-                if name and name.lower() != "name":
-                    names.append(name)
+            # wmic is removed on newer Windows builds; PowerShell works everywhere.
+            try:
+                out = subprocess.check_output(
+                    ["powershell", "-NoProfile", "-Command",
+                     "(Get-CimInstance Win32_VideoController).Name"],
+                    text=True, timeout=8, creationflags=0x08000000)
+                names = [line.strip() for line in out.splitlines() if line.strip()]
+            except Exception:
+                out = subprocess.check_output(
+                    ["wmic", "path", "win32_VideoController", "get", "name"],
+                    text=True, timeout=5, creationflags=0x08000000)
+                for line in out.splitlines():
+                    name = line.strip()
+                    if name and name.lower() != "name":
+                        names.append(name)
         else:
             out = subprocess.check_output(
                 ["lspci"], text=True, timeout=5, stderr=subprocess.DEVNULL)
@@ -159,8 +191,10 @@ class TrainThread(QThread):
                 try:
                     import torch
                     if torch.cuda.is_available():
-                        torch.backends.cuda.matmul.allow_tf32 = True
-                        torch.backends.cudnn.allow_tf32 = True
+                        idx = int(device) if device.isdigit() else torch.cuda.current_device()
+                        if is_rtx_gpu(torch.cuda.get_device_name(idx)):
+                            torch.backends.cuda.matmul.allow_tf32 = True
+                            torch.backends.cudnn.allow_tf32 = True
                 except Exception:
                     pass
             model = YOLO(self.params["model"])
@@ -350,9 +384,13 @@ class TrainingTab(QWidget):
                 gpu_names = _scan_gpu_info()
                 if gpu_names:
                     names_str = ", ".join(gpu_names)
-                    msg = (
-                        f"❌ CUDA недоступна.\nНайдены GPU: {names_str}\n"
-                        "Установите CUDA-драйверы NVIDIA или используйте CPU.")
+                    if any(is_rtx_gpu(n) for n in gpu_names):
+                        hint = ("Установлена CPU-версия PyTorch. Поставьте CUDA-версию:\n"
+                                "pip install torch torchvision "
+                                "--index-url https://download.pytorch.org/whl/cu121")
+                    else:
+                        hint = "Установите CUDA-драйверы NVIDIA или используйте CPU."
+                    msg = f"❌ CUDA недоступна.\nНайдены GPU: {names_str}\n{hint}"
                 else:
                     msg = "❌ GPU не найден"
             else:
