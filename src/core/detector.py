@@ -8,8 +8,20 @@ def _is_cuda_device(device) -> bool:
     return isinstance(device, str) and (device.isdigit() or device.startswith("cuda"))
 
 
+def _is_rtx_device(device) -> bool:
+    """Check whether the given CUDA device index is an RTX card (has tensor cores)."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False
+        idx = int(device) if str(device).isdigit() else torch.cuda.current_device()
+        return "rtx" in torch.cuda.get_device_name(idx).lower()
+    except Exception:
+        return False
+
+
 def _enable_tensor_cores():
-    """Enable TF32/tensor-core math on NVIDIA GPUs that support it (RTX 20xx+)."""
+    """Enable TF32/tensor-core math for RTX GPUs (Turing/Ampere/Ada, RTX 20xx+)."""
     try:
         import torch
         if torch.cuda.is_available():
@@ -77,7 +89,7 @@ class DetectorThread(QThread):
             return
         self.running = True
         self.status_update.emit("Детекция запущена")
-        use_half = _is_cuda_device(self.device)
+        use_half = _is_cuda_device(self.device) and _is_rtx_device(self.device)
         if use_half:
             _enable_tensor_cores()
         while self.running:
