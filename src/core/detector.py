@@ -4,6 +4,21 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QImage
 
 
+def _is_cuda_device(device) -> bool:
+    return isinstance(device, str) and (device.isdigit() or device.startswith("cuda"))
+
+
+def _enable_tensor_cores():
+    """Enable TF32/tensor-core math on NVIDIA GPUs that support it (RTX 20xx+)."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+    except Exception:
+        pass
+
+
 def _list_cameras(max_test=4):
     """Return list of working camera indices, suppressing OpenCV stderr."""
     found = []
@@ -62,6 +77,9 @@ class DetectorThread(QThread):
             return
         self.running = True
         self.status_update.emit("Детекция запущена")
+        use_half = _is_cuda_device(self.device)
+        if use_half:
+            _enable_tensor_cores()
         while self.running:
             if self.paused:
                 self.msleep(50)
@@ -73,7 +91,7 @@ class DetectorThread(QThread):
                     continue
                 break
             results = self.model(frame, conf=self.conf, iou=self.iou,
-                                 device=self.device, verbose=False)
+                                 device=self.device, half=use_half, verbose=False)
             annotated = results[0].plot()
             rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape

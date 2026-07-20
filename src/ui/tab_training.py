@@ -154,6 +154,15 @@ class TrainThread(QThread):
     def run(self):
         try:
             from ultralytics import YOLO
+            device = self.params["device"]
+            if isinstance(device, str) and (device.isdigit() or device.startswith("cuda")):
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.backends.cuda.matmul.allow_tf32 = True
+                        torch.backends.cudnn.allow_tf32 = True
+                except Exception:
+                    pass
             model = YOLO(self.params["model"])
             self.log.emit(f"Начало обучения: {self.params}")
             model.train(
@@ -165,6 +174,7 @@ class TrainThread(QThread):
                 project=self.params["project"],
                 name=self.params["name"],
                 device=self.params["device"],
+                amp=True,
             )
             self.log.emit("Обучение завершено!")
             self.log.emit(
