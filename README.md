@@ -41,6 +41,24 @@ python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_
 (тензорные ядра) детекция и обучение автоматически используют TF32/FP16
 для ускорения, если выбрано CUDA-устройство.
 
+### macOS (Apple Silicon)
+
+Программа полностью поддерживает macOS, включая Apple Silicon (M1/M2/M3/M4).
+`pip install -r requirements.txt` ставит версию PyTorch со встроенной
+поддержкой **MPS** (Metal Performance Shaders) — отдельно ничего доустанавливать
+не нужно. При выборе устройства `mps` в настройках обучения используется GPU
+Apple.
+
+Проверьте, что MPS определился:
+
+```bash
+python -c "import torch; print(torch.backends.mps.is_available())"
+```
+
+Доступ к камере на macOS запрашивается системой автоматически при первом
+запуске детекции — разрешите его в **System Settings → Privacy & Security →
+Camera**.
+
 ## Запуск
 
 ```bash

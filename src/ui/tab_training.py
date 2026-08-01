@@ -149,6 +149,14 @@ def _scan_gpu_info():
                     name = line.strip()
                     if name and name.lower() != "name":
                         names.append(name)
+        elif platform.system() == "Darwin":
+            out = subprocess.check_output(
+                ["system_profiler", "SPDisplaysDataType"],
+                text=True, timeout=8, stderr=subprocess.DEVNULL)
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("Chipset Model:"):
+                    names.append(line.split(":", 1)[-1].strip())
         else:
             out = subprocess.check_output(
                 ["lspci"], text=True, timeout=5, stderr=subprocess.DEVNULL)
