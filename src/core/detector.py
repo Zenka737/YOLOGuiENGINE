@@ -1,7 +1,19 @@
 import os
+import platform
 import cv2
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QImage
+
+
+def _camera_backend():
+    """Pick the OpenCV capture backend appropriate for the current OS."""
+    system = platform.system()
+    default = getattr(cv2, "CAP_ANY", 0)
+    if system == "Windows":
+        return getattr(cv2, "CAP_DSHOW", default)
+    if system == "Darwin":
+        return getattr(cv2, "CAP_AVFOUNDATION", default)
+    return default
 
 
 def _is_cuda_device(device) -> bool:
@@ -34,12 +46,13 @@ def _enable_tensor_cores():
 def _list_cameras(max_test=4):
     """Return list of working camera indices, suppressing OpenCV stderr."""
     found = []
+    backend = _camera_backend()
     devnull = open(os.devnull, "w")
     old_stderr = os.dup(2)
     os.dup2(devnull.fileno(), 2)
     try:
         for i in range(max_test):
-            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            cap = cv2.VideoCapture(i, backend)
             if cap.isOpened():
                 found.append(i)
                 cap.release()
