@@ -41,7 +41,23 @@ python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_
 (тензорные ядра) детекция и обучение автоматически используют TF32/FP16
 для ускорения, если выбрано CUDA-устройство.
 
-### macOS (Apple Silicon)
+### macOS
+
+На macOS (в т.ч. Big Sur) `requirements.txt` автоматически ставит
+`opencv-python-headless` вместо обычного `opencv-python` — GUI-часть OpenCV
+здесь не используется (весь интерфейс на PyQt6), а headless-сборка скачивается
+и устанавливается значительно быстрее.
+
+Если установка всё равно долгая (например, на Big Sur ставится не готовый
+wheel, а собирается из исходников), сначала обновите pip — это почти всегда
+решает проблему:
+
+```bash
+python3 -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+#### Apple Silicon
 
 Программа полностью поддерживает macOS, включая Apple Silicon (M1/M2/M3/M4).
 `pip install -r requirements.txt` ставит версию PyTorch со встроенной
